@@ -7,6 +7,7 @@
 )]
 
 use std::{
+    collections::VecDeque,
     fs::File,
     io::Write,
     path::Path,
@@ -34,7 +35,10 @@ use crate::{
     metadata_writer::{MetadataWriteHandle, MetadataWriter},
 };
 
-use super::{OnlineScheduler, OnlineSchedulerConfig, ProgressSink, SchedulerProgress, UnixClockFn};
+use super::{
+    OnlineRunTally, OnlineScheduler, OnlineSchedulerConfig, ProgressSink, SchedulerProgress,
+    TrackOutcome, UnixClockFn, WorkerState,
+};
 
 /// Spawn a real [`MetadataWriter`] in front of the test's
 /// [`StubMetadata`] so the online scheduler's tag writes flow
@@ -154,6 +158,8 @@ struct StubRemote {
     identify: Mutex<Option<RemoteResult<Option<TrackMatch>>>>,
     enrich: Mutex<Option<RemoteResult<TrackMatch>>>,
     lyrics: Mutex<Option<RemoteResult<Option<FetchedLyrics>>>>,
+    /// Answers given, in order, ahead of `lyrics`.
+    scripted_lyrics: Mutex<VecDeque<RemoteResult<Option<FetchedLyrics>>>>,
     artwork: Mutex<Option<RemoteResult<Option<FetchedArtwork>>>>,
     artwork_for_match: Mutex<Option<RemoteResult<Option<FetchedArtwork>>>>,
     identify_calls: AtomicU32,
@@ -166,6 +172,13 @@ struct StubRemote {
 impl StubRemote {
     fn with_lyrics(self, value: RemoteResult<Option<FetchedLyrics>>) -> Self {
         *self.lyrics.lock().expect("lock") = Some(value);
+        self
+    }
+    fn with_scripted_lyrics(
+        self,
+        answers: impl IntoIterator<Item = RemoteResult<Option<FetchedLyrics>>>,
+    ) -> Self {
+        self.scripted_lyrics.lock().expect("lock").extend(answers);
         self
     }
     fn with_artwork(self, value: RemoteResult<Option<FetchedArtwork>>) -> Self {
@@ -219,12 +232,18 @@ impl RemoteMetadataService for StubRemote {
         response.lock().expect("lock").clone().unwrap_or(Ok(None))
     }
     fn fetch_lyrics(&self, _query: &TrackQuery) -> RemoteResult<Option<FetchedLyrics>> {
+        let scripted = self.scripted_lyrics.lock().expect("lock").pop_front();
+        let answer = scripted.unwrap_or_else(|| {
+            self.lyrics
+                .lock()
+                .expect("lock")
+                .clone()
+                .unwrap_or(Ok(None))
+        });
+        // Counted once answered: a test that sees the call and changes the
+        // answer changes the next one.
         self.lyrics_calls.fetch_add(1, Ordering::SeqCst);
-        self.lyrics
-            .lock()
-            .expect("lock")
-            .clone()
-            .unwrap_or(Ok(None))
+        answer
     }
 }
 
@@ -745,9 +764,11 @@ fn rejected_online_attempt_stamp_halts_the_sweep() {
     // provider again, and counts the track.
     faulty.set_fail_online_attempt(false);
     scheduler.wake();
-    let _idle = wait_for(&rx, Duration::from_secs(2), |progress| {
-        matches!(progress, SchedulerProgress::Idle { completed: 1, .. })
-    });
+    let _idle = wait_for(
+        &rx,
+        Duration::from_secs(2),
+        |progress| matches!(progress, SchedulerProgress::Idle(tally) if tally.checked() == 1),
+    );
     assert_eq!(faulty.online_attempt_calls(), 2);
     assert_eq!(
         remote.lyrics_calls.load(Ordering::SeqCst),
@@ -1642,10 +1663,10 @@ fn a_rate_limited_track_is_tried_again_once_the_cool_down_has_passed() {
     });
     assert_eq!(
         idle,
-        SchedulerProgress::Idle {
-            completed: 1,
-            failed: 0
-        }
+        SchedulerProgress::Idle(OnlineRunTally {
+            not_found: 1,
+            ..OnlineRunTally::default()
+        })
     );
     assert_eq!(remote.lyrics_calls.load(Ordering::SeqCst), 2);
 
@@ -1758,10 +1779,10 @@ fn a_rate_limit_keeps_the_rest_of_an_explicit_run() {
     });
     assert_eq!(
         idle,
-        SchedulerProgress::Idle {
-            completed: 3,
-            failed: 0
-        }
+        SchedulerProgress::Idle(OnlineRunTally {
+            not_found: 3,
+            ..OnlineRunTally::default()
+        })
     );
 
     scheduler.shutdown();
@@ -2026,7 +2047,7 @@ fn a_candidate_genre_adopts_the_spelling_most_of_the_library_uses() {
 #[test]
 fn a_second_capability_requested_for_a_queued_track_joins_the_first() {
     let track_id = TrackId::new(1).expect("valid track id");
-    let mut queue = std::collections::VecDeque::new();
+    let mut queue = VecDeque::new();
     let artwork = OnlineCapabilities {
         artwork: true,
         ..OnlineCapabilities::none()
@@ -2165,9 +2186,11 @@ fn a_rejected_stamp_keeps_the_rest_of_the_explicit_batch() {
 
     faulty.set_fail_online_attempt(false);
     scheduler.wake();
-    let _idle = wait_for(&rx, Duration::from_secs(2), |progress| {
-        matches!(progress, SchedulerProgress::Idle { completed: 2, .. })
-    });
+    let _idle = wait_for(
+        &rx,
+        Duration::from_secs(2),
+        |progress| matches!(progress, SchedulerProgress::Idle(tally) if tally.checked() == 2),
+    );
     assert_eq!(
         remote.lyrics_calls.load(Ordering::SeqCst),
         2,
@@ -2258,9 +2281,11 @@ fn a_track_cut_off_by_a_rate_limit_resumes_without_repeating_what_it_finished() 
     });
     *remote.lyrics.lock().expect("lock") = Some(Ok(None));
 
-    let _idle = wait_for(&rx, Duration::from_secs(3), |progress| {
-        matches!(progress, SchedulerProgress::Idle { completed: 1, .. })
-    });
+    let _idle = wait_for(
+        &rx,
+        Duration::from_secs(3),
+        |progress| matches!(progress, SchedulerProgress::Idle(tally) if tally.checked() == 1),
+    );
     assert_eq!(remote.lyrics_calls.load(Ordering::SeqCst), 2);
     assert_eq!(
         remote.artwork_calls.load(Ordering::SeqCst),
@@ -2325,8 +2350,11 @@ fn plain_lyrics_committed_before_a_synced_lyrics_failure_are_announced() {
         let _ = notify_tx.send(id);
     });
     let store: Arc<dyn LibraryStore> = faulty.clone();
-    let (scheduler, _rx, _writer) =
+    let (scheduler, rx, _writer) =
         explicit_only_scheduler(remote, store.clone(), temp.path(), Some(track_updated));
+    let _idle = wait_for(&rx, Duration::from_secs(2), |progress| {
+        matches!(progress, SchedulerProgress::Idle { .. })
+    });
 
     scheduler.request_explicit_run(vec![track.id], lyrics_only());
     assert_eq!(
@@ -2334,6 +2362,17 @@ fn plain_lyrics_committed_before_a_synced_lyrics_failure_are_announced() {
             .recv_timeout(Duration::from_secs(2))
             .expect("the committed plain lyrics are announced"),
         track.id
+    );
+    // The run reports the update it committed, not only the failure.
+    let idle = wait_for(&rx, Duration::from_secs(2), |progress| {
+        matches!(progress, SchedulerProgress::Idle { .. })
+    });
+    assert_eq!(
+        idle,
+        SchedulerProgress::Idle(OnlineRunTally {
+            updated: 1,
+            ..OnlineRunTally::default()
+        })
     );
     assert_eq!(
         store
@@ -2378,10 +2417,230 @@ fn an_unreadable_synced_lyrics_row_fails_the_attempt_without_contacting_the_prov
         matches!(progress, SchedulerProgress::Idle { .. })
     });
     assert!(
-        matches!(idle, SchedulerProgress::Idle { failed: 1, .. }),
+        matches!(idle, SchedulerProgress::Idle(tally) if tally.failed == 1),
         "{idle:?}"
     );
     assert_eq!(remote.lyrics_calls.load(Ordering::SeqCst), 0);
 
     scheduler.shutdown();
+}
+
+/// A run reports how many tracks were given online data apart from how
+/// many it checked: a track the provider has nothing for is checked, not
+/// filled (#351, A9-27).
+#[test]
+fn a_run_tells_the_tracks_it_filled_from_those_it_only_checked() {
+    let temp = TempDir::new().expect("temp");
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    let track = track_with_metadata(temp.path(), "alpha.flac");
+    store.save_track(track.clone()).expect("save");
+    let remote = Arc::new(StubRemote::default().with_lyrics(Ok(None)));
+    let (scheduler, rx, _writer) =
+        explicit_only_scheduler(remote.clone(), store, temp.path(), None);
+    let _idle = wait_for(&rx, Duration::from_secs(2), |progress| {
+        matches!(progress, SchedulerProgress::Idle { .. })
+    });
+
+    scheduler.request_explicit_run(vec![track.id], lyrics_only());
+    let missed = wait_for(&rx, Duration::from_secs(2), |progress| {
+        matches!(progress, SchedulerProgress::Idle { .. })
+    });
+    *remote.lyrics.lock().expect("lock") = Some(Ok(Some(FetchedLyrics {
+        plain: Some("Plain text".to_owned()),
+        synced_lrc: None,
+    })));
+    scheduler.request_explicit_run(vec![track.id], lyrics_only());
+    let filled = wait_for(&rx, Duration::from_secs(2), |progress| {
+        matches!(progress, SchedulerProgress::Idle { .. })
+    });
+    scheduler.shutdown();
+
+    assert_eq!(
+        missed,
+        SchedulerProgress::Idle(OnlineRunTally {
+            not_found: 1,
+            ..OnlineRunTally::default()
+        })
+    );
+    assert_eq!(
+        filled,
+        SchedulerProgress::Idle(OnlineRunTally {
+            updated: 1,
+            ..OnlineRunTally::default()
+        })
+    );
+}
+
+/// A track that already holds what was asked for is not reported as one
+/// the providers had nothing for: none was asked.
+#[test]
+fn a_track_that_already_holds_what_was_asked_is_reported_complete() {
+    let temp = TempDir::new().expect("temp");
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    let mut track = track_with_metadata(temp.path(), "alpha.flac");
+    track.metadata.lyrics = Some("Existing".to_owned());
+    store.save_track(track.clone()).expect("save");
+    store
+        .record_synced_lyrics(
+            track.id,
+            &SyncedLyrics::parse_lrc("[00:01.00]Existing").expect("parse"),
+            "test",
+        )
+        .expect("seed synced");
+    let remote = Arc::new(StubRemote::default().with_lyrics(Ok(None)));
+    let (scheduler, rx, _writer) =
+        explicit_only_scheduler(remote.clone(), store, temp.path(), None);
+    let _idle = wait_for(&rx, Duration::from_secs(2), |progress| {
+        matches!(progress, SchedulerProgress::Idle { .. })
+    });
+
+    scheduler.request_explicit_run(vec![track.id], lyrics_only());
+    let idle = wait_for(&rx, Duration::from_secs(2), |progress| {
+        matches!(progress, SchedulerProgress::Idle { .. })
+    });
+    scheduler.shutdown();
+
+    assert_eq!(
+        idle,
+        SchedulerProgress::Idle(OnlineRunTally {
+            already_complete: 1,
+            ..OnlineRunTally::default()
+        })
+    );
+    assert_eq!(remote.lyrics_calls.load(Ordering::SeqCst), 0);
+}
+
+/// A track given artwork before a rate limit cut its lyrics lookup short
+/// is reported updated, even when the lyrics lookup it resumes with
+/// finds nothing.
+#[test]
+fn a_track_updated_before_a_rate_limit_is_reported_updated_once_it_resumes() {
+    let temp = TempDir::new().expect("temp");
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    let track = track_with_metadata(temp.path(), "alpha.flac");
+    store.save_track(track.clone()).expect("save");
+    let remote = Arc::new(
+        StubRemote::default()
+            .with_artwork(Ok(Some(FetchedArtwork {
+                bytes: valid_artwork(),
+                provider: ArtworkProvider::CoverArtArchive,
+            })))
+            .with_scripted_lyrics([Err(RemoteError::RateLimited {
+                cool_down: Duration::from_millis(200),
+            })]),
+    );
+    let (scheduler, rx, _writer) =
+        explicit_only_scheduler(remote.clone(), store, temp.path(), None);
+    let _idle = wait_for(&rx, Duration::from_secs(2), |progress| {
+        matches!(progress, SchedulerProgress::Idle { .. })
+    });
+
+    scheduler.request_explicit_run(
+        vec![track.id],
+        OnlineCapabilities {
+            artwork: true,
+            tags: false,
+            lyrics: true,
+        },
+    );
+    let idle = wait_for(&rx, Duration::from_secs(3), |progress| {
+        matches!(progress, SchedulerProgress::Idle { .. })
+    });
+    scheduler.shutdown();
+
+    assert_eq!(
+        idle,
+        SchedulerProgress::Idle(OnlineRunTally {
+            updated: 1,
+            ..OnlineRunTally::default()
+        })
+    );
+    assert_eq!(remote.lyrics_calls.load(Ordering::SeqCst), 2);
+    assert_eq!(remote.artwork_calls.load(Ordering::SeqCst), 1);
+}
+
+/// The run's report of what its settled passes came to.
+fn run_report(state: &mut WorkerState) -> SchedulerProgress {
+    let reported = Mutex::new(None);
+    state.end_run(&|progress| *reported.lock().expect("lock") = Some(progress));
+    reported
+        .into_inner()
+        .expect("lock")
+        .expect("the run reports")
+}
+
+const ARTWORK: OnlineCapabilities = OnlineCapabilities {
+    artwork: true,
+    tags: false,
+    lyrics: false,
+};
+const LYRICS: OnlineCapabilities = OnlineCapabilities {
+    artwork: false,
+    tags: false,
+    lyrics: true,
+};
+const NOTHING: OnlineCapabilities = OnlineCapabilities::none();
+
+/// A track two passes of one run reach (a manual request, then the
+/// background sweep) is counted once, by what both came to, while the
+/// live progress counts both passes and never goes back.
+#[test]
+fn a_track_reached_twice_in_a_run_is_counted_once() {
+    let track = TrackId::new(1).expect("non-zero");
+    let mut state = WorkerState::new(OnlineSettings::default(), None);
+    state.settle(track, Some(TrackOutcome::NotFound), LYRICS, NOTHING);
+    state.settle(track, Some(TrackOutcome::Failed), ARTWORK, NOTHING);
+    assert_eq!((state.passes_checked, state.passes_failed), (1, 1));
+    state.settle(track, Some(TrackOutcome::Updated), ARTWORK, NOTHING);
+
+    assert_eq!(
+        run_report(&mut state),
+        SchedulerProgress::Idle(OnlineRunTally {
+            updated: 1,
+            ..OnlineRunTally::default()
+        })
+    );
+    // The next run starts from nothing.
+    state.settle(track, Some(TrackOutcome::NotFound), LYRICS, NOTHING);
+    assert_eq!(
+        run_report(&mut state),
+        SchedulerProgress::Idle(OnlineRunTally {
+            not_found: 1,
+            ..OnlineRunTally::default()
+        })
+    );
+}
+
+/// A track a rate limit cut short is pending until the capability it
+/// cut off has run, not already complete for those that did, nor done
+/// once another capability runs.
+#[test]
+fn a_track_cut_short_is_pending_until_what_it_owes_has_run() {
+    let cut_short = TrackId::new(1).expect("non-zero");
+    let resumed = TrackId::new(2).expect("non-zero");
+    let mut state = WorkerState::new(OnlineSettings::default(), None);
+    state.settle(
+        cut_short,
+        Some(TrackOutcome::AlreadyComplete),
+        ARTWORK,
+        LYRICS,
+    );
+    state.settle(resumed, None, NOTHING, ARTWORK);
+    assert_eq!(state.passes_checked, 0, "a pass cut short is not progress");
+    // The cut-short track runs again for its artwork only: its lyrics
+    // are still owed.
+    state.settle(cut_short, Some(TrackOutcome::NotFound), ARTWORK, NOTHING);
+    state.settle(resumed, Some(TrackOutcome::NotFound), ARTWORK, NOTHING);
+
+    assert_eq!(
+        run_report(&mut state),
+        SchedulerProgress::Idle(OnlineRunTally {
+            not_found: 1,
+            pending: 1,
+            ..OnlineRunTally::default()
+        })
+    );
 }

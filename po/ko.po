@@ -6,7 +6,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Sustain\n"
 "Report-Msgid-Bugs-To: https://github.com/open-sustain/sustain/issues\n"
-"POT-Creation-Date: 2026-11-21 06:44+0100\n"
+"POT-Creation-Date: 2026-11-21 07:03+0100\n"
 "PO-Revision-Date: 2026-11-16 20:38+0100\n"
 "Last-Translator: Sustain maintainers\n"
 "Language-Team: Korean\n"
@@ -89,7 +89,7 @@ msgstr "별 5개 등급, 재생 횟수, 건너뛴 횟수, 마지막 재생, 마�
 msgid "A device sync is already running."
 msgstr "기기 동기화가 이미 진행 중입니다."
 
-#: crates/app_runtime/src/notifications.rs:1069
+#: crates/app_runtime/src/notifications.rs:1079
 #, rust-format
 msgid "A folder cannot be moved inside itself."
 msgstr "폴더를 자기 자신 안으로 옮길 수 없습니다."
@@ -110,7 +110,7 @@ msgstr ""
 msgid "A music library manager and player for the Linux desktop."
 msgstr "Linux 데스크톱용 음악 보관함 관리자이자 플레이어입니다."
 
-#: crates/app_runtime/src/notifications.rs:1059
+#: crates/app_runtime/src/notifications.rs:1069
 #, rust-format
 msgid "A smart playlist needs at least one rule."
 msgstr "스마트 재생 목록에는 규칙이 하나 이상 필요합니다."
@@ -150,12 +150,12 @@ msgstr "재생 목록에 추가…"
 msgid "Add to Queue"
 msgstr "대기열에 추가"
 
-#: crates/app_runtime/src/notifications.rs:454
+#: crates/app_runtime/src/notifications.rs:469
 #, rust-format
 msgid "Adding tracks ({processed}/{total})..."
 msgstr "트랙 추가 중({processed}/{total})…"
 
-#: crates/app_runtime/src/notifications.rs:449
+#: crates/app_runtime/src/notifications.rs:464
 #, rust-format
 msgid "Adding tracks..."
 msgstr "트랙 추가 중…"
@@ -241,18 +241,18 @@ msgstr[0] "누락된 트랙 {count}개 분석"
 msgid "Analysis"
 msgstr "분석"
 
-#: crates/app_runtime/src/notifications.rs:618
+#: crates/app_runtime/src/notifications.rs:628
 #, rust-format
 msgid "Analysis paused: the library database rejected a write ({detail})."
 msgstr "분석 일시 중지됨: 보관함 데이터베이스가 쓰기를 거부했습니다({detail})."
 
-#: crates/app_runtime/src/notifications.rs:550
+#: crates/app_runtime/src/notifications.rs:565
 #, rust-format
 msgid "Analyzed {completed} track"
 msgid_plural "Analyzed {completed} tracks"
 msgstr[0] "트랙 {completed}개 분석됨"
 
-#: crates/app_runtime/src/notifications.rs:530
+#: crates/app_runtime/src/notifications.rs:545
 #, rust-format
 msgid "Analyzed {completed} track."
 msgid_plural "Analyzed {completed} tracks."
@@ -264,12 +264,12 @@ msgstr[0] "트랙 {completed}개를 분석했습니다."
 msgid "Analyze…"
 msgstr "분석…"
 
-#: crates/app_runtime/src/notifications.rs:520
+#: crates/app_runtime/src/notifications.rs:535
 #, rust-format
 msgid "Analyzing tracks ({processed}/{total})..."
 msgstr "트랙 분석 중({processed}/{total})…"
 
-#: crates/app_runtime/src/notifications.rs:1012
+#: crates/app_runtime/src/notifications.rs:1022
 #, rust-format
 msgid "Another background task is already running."
 msgstr "다른 백그라운드 작업이 이미 진행 중입니다."
@@ -458,7 +458,7 @@ msgstr "비트 전송률(kbps)"
 msgid "CD import format"
 msgstr "CD 가져오기 형식"
 
-#: crates/app_runtime/src/notifications.rs:497
+#: crates/app_runtime/src/notifications.rs:512
 #, rust-format
 msgid "CD import stopped: {imported} track imported."
 msgid_plural "CD import stopped: {imported} tracks imported."
@@ -469,7 +469,7 @@ msgstr[0] "CD 가져오기 중지됨: 트랙 {imported}개를 가져왔습니다
 msgid "CD read accuracy"
 msgstr "CD 읽기 정확도"
 
-#: crates/app_runtime/src/notifications.rs:1117
+#: crates/app_runtime/src/notifications.rs:1127
 #, rust-format
 msgid "CD ripping is not available in this build."
 msgstr "이 빌드에서는 CD 리핑을 사용할 수 없습니다."
@@ -528,17 +528,17 @@ msgstr "아트워크 선택"
 msgid "Choose Library Folder"
 msgstr "보관함 폴더 선택"
 
-#: crates/app_runtime/src/notifications.rs:1033
+#: crates/app_runtime/src/notifications.rs:1043
 #, rust-format
 msgid "Choose a library folder first."
 msgstr "먼저 보관함 폴더를 선택하십시오."
 
-#: crates/app_runtime/src/notifications.rs:1094
+#: crates/app_runtime/src/notifications.rs:1104
 #, rust-format
 msgid "Choose a replacement inside the configured library folder."
 msgstr "설정된 보관함 폴더 안에서 대체 파일을 선택하십시오."
 
-#: crates/app_runtime/src/notifications.rs:1097
+#: crates/app_runtime/src/notifications.rs:1107
 #, rust-format
 msgid "Choose a supported audio file."
 msgstr "지원되는 오디오 파일을 선택하십시오."
@@ -635,7 +635,7 @@ msgstr "중복 트랙 통합 중…"
 msgid "Copy"
 msgstr "복사"
 
-#: crates/app_runtime/src/notifications.rs:1146
+#: crates/app_runtime/src/notifications.rs:1156
 #, rust-format
 msgid "Copying tracks ({completed}/{total})…"
 msgstr "트랙 복사 중({completed}/{total})…"
@@ -766,12 +766,12 @@ msgstr "자세히…"
 msgid "Device"
 msgstr "기기"
 
-#: crates/app_runtime/src/notifications.rs:1205
+#: crates/app_runtime/src/notifications.rs:1215
 #, rust-format
 msgid "Device already up to date."
 msgstr "기기가 이미 최신 상태입니다."
 
-#: crates/app_runtime/src/notifications.rs:1202
+#: crates/app_runtime/src/notifications.rs:1212
 #, rust-format
 msgid "Device already up to date; {unplayable}."
 msgstr "기기가 이미 최신 상태입니다. {unplayable}."
@@ -1102,24 +1102,24 @@ msgstr "이미지"
 msgid "Import CD"
 msgstr "CD 가져오기"
 
-#: crates/app_runtime/src/notifications.rs:683
+#: crates/app_runtime/src/notifications.rs:693
 #, rust-format
 msgid "Import stopped after an error: {changes}."
 msgstr "오류로 가져오기 중지됨: {changes}."
 
-#: crates/app_runtime/src/notifications.rs:690
+#: crates/app_runtime/src/notifications.rs:700
 #, rust-format
 msgid "Import stopped: {count} added before cancel."
 msgid_plural "Import stopped: {count} added before cancel."
 msgstr[0] "가져오기 중지됨: 취소 전에 {count}개 추가됨."
 
-#: crates/app_runtime/src/notifications.rs:485
+#: crates/app_runtime/src/notifications.rs:500
 #, rust-format
 msgid "Imported {imported} of {requested} track: {failure}"
 msgid_plural "Imported {imported} of {requested} tracks: {failure}"
 msgstr[0] "트랙 {requested}개 중 {imported}개를 가져왔습니다: {failure}"
 
-#: crates/app_runtime/src/notifications.rs:506
+#: crates/app_runtime/src/notifications.rs:521
 #, rust-format
 msgid "Imported {imported} track from CD."
 msgid_plural "Imported {imported} tracks from CD."
@@ -1130,12 +1130,12 @@ msgstr[0] "CD에서 트랙 {imported}개를 가져왔습니다."
 msgid "Importing"
 msgstr "가져오는 중"
 
-#: crates/app_runtime/src/notifications.rs:470
+#: crates/app_runtime/src/notifications.rs:485
 #, rust-format
 msgid "Importing CD ({completed}/{total})..."
 msgstr "CD 가져오는 중({completed}/{total})…"
 
-#: crates/app_runtime/src/notifications.rs:465
+#: crates/app_runtime/src/notifications.rs:480
 #, rust-format
 msgid "Importing CD..."
 msgstr "CD 가져오는 중…"
@@ -1159,18 +1159,18 @@ msgstr ""
 "Smart Shuffle을 처음 켤 때 만들어지며, 이후 보관함이나 그 분석이 바뀔 때마다 "
 "갱신됩니다."
 
-#: crates/app_runtime/src/notifications.rs:757
+#: crates/app_runtime/src/notifications.rs:767
 #, rust-format
 msgid "It could not be copied into the library folder."
 msgstr "보관함 폴더로 복사하지 못했습니다."
 
-#: crates/app_runtime/src/notifications.rs:763
+#: crates/app_runtime/src/notifications.rs:773
 #, rust-format
 msgid ""
 "It is outside the library folder, and the library keeps files where they are."
 msgstr "보관함 폴더 밖에 있으며, 보관함은 파일을 원래 위치에 둡니다."
 
-#: crates/app_runtime/src/notifications.rs:755
+#: crates/app_runtime/src/notifications.rs:765
 #, rust-format
 msgid "Its tags could not be read."
 msgstr "태그를 읽지 못했습니다."
@@ -1255,7 +1255,7 @@ msgstr "마지막 재생"
 msgid "Last skipped"
 msgstr "마지막 건너뜀"
 
-#: crates/app_runtime/src/notifications.rs:849
+#: crates/app_runtime/src/notifications.rs:859
 #, rust-format
 msgid "Left alone: {groups}."
 msgstr "그대로 둠: {groups}."
@@ -1271,25 +1271,25 @@ msgctxt "shortcuts group"
 msgid "Library"
 msgstr "보관함"
 
-#: crates/app_runtime/src/notifications.rs:974
+#: crates/app_runtime/src/notifications.rs:984
 #, rust-format
 msgid "Library folder checked."
 msgstr "보관함 폴더를 확인했습니다."
 
-#: crates/app_runtime/src/notifications.rs:991
+#: crates/app_runtime/src/notifications.rs:1001
 #, rust-format
 msgid "Library folder checked: all {total} track found."
 msgid_plural "Library folder checked: all {total} tracks found."
 msgstr[0] "보관함 폴더를 확인했습니다: 트랙 {total}개를 모두 찾았습니다."
 
-#: crates/app_runtime/src/notifications.rs:1000
+#: crates/app_runtime/src/notifications.rs:1010
 #, rust-format
 msgid "Library folder checked: {missing} of {total} track not found."
 msgid_plural "Library folder checked: {missing} of {total} tracks not found."
 msgstr[0] ""
 "보관함 폴더를 확인했습니다: 트랙 {total}개 중 {missing}개를 찾을 수 없습니다."
 
-#: crates/app_runtime/src/notifications.rs:979
+#: crates/app_runtime/src/notifications.rs:989
 #, rust-format
 msgid ""
 "Library folder checked: {missing} of {total} track not found; {unresolved} "
@@ -1301,18 +1301,18 @@ msgstr[0] ""
 "보관함 폴더를 확인했습니다: 트랙 {total}개 중 {missing}개를 찾을 수 없고, "
 "{unresolved}개는 확인할 수 없습니다."
 
-#: crates/app_runtime/src/notifications.rs:933
+#: crates/app_runtime/src/notifications.rs:943
 #, rust-format
 msgid "Library folder updated."
 msgstr "보관함 폴더를 업데이트했습니다."
 
-#: crates/app_runtime/src/notifications.rs:950
+#: crates/app_runtime/src/notifications.rs:960
 #, rust-format
 msgid "Library folder updated: all {total} track found."
 msgid_plural "Library folder updated: all {total} tracks found."
 msgstr[0] "보관함 폴더를 업데이트했습니다: 트랙 {total}개를 모두 찾았습니다."
 
-#: crates/app_runtime/src/notifications.rs:959
+#: crates/app_runtime/src/notifications.rs:969
 #, rust-format
 msgid ""
 "Library folder updated: {missing} of {total} track not found at the new "
@@ -1324,7 +1324,7 @@ msgstr[0] ""
 "보관함 폴더를 업데이트했습니다: 트랙 {total}개 중 {missing}개를 새 위치에서 "
 "찾지 못했습니다."
 
-#: crates/app_runtime/src/notifications.rs:938
+#: crates/app_runtime/src/notifications.rs:948
 #, rust-format
 msgid ""
 "Library folder updated: {missing} of {total} track not found; {unresolved} "
@@ -1336,7 +1336,7 @@ msgstr[0] ""
 "보관함 폴더를 업데이트했습니다: 트랙 {total}개 중 {missing}개를 찾지 못했고, "
 "{unresolved}개는 확인하지 못했습니다."
 
-#: crates/app_runtime/src/notifications.rs:777
+#: crates/app_runtime/src/notifications.rs:787
 #, rust-format
 msgid "Library organization stopped: {moved}, {pending}."
 msgstr "보관함 정리 중지됨: {moved}, {pending}."
@@ -1346,7 +1346,7 @@ msgstr "보관함 정리 중지됨: {moved}, {pending}."
 msgid "Library organization will stop after the current file."
 msgstr "현재 파일을 처리한 후 보관함 정리를 중지합니다."
 
-#: crates/app_runtime/src/notifications.rs:786
+#: crates/app_runtime/src/notifications.rs:796
 #, rust-format
 msgid "Library organized: {moved}, {organized}, {missing}."
 msgstr "보관함 정리 완료: {moved}, {organized}, {missing}."
@@ -1356,7 +1356,7 @@ msgstr "보관함 정리 완료: {moved}, {organized}, {missing}."
 msgid "Library path"
 msgstr "보관함 경로"
 
-#: crates/app_runtime/src/notifications.rs:1027
+#: crates/app_runtime/src/notifications.rs:1037
 #, rust-format
 msgid "Library scanning is not available in this build."
 msgstr "이 빌드에서는 보관함 검사를 사용할 수 없습니다."
@@ -1500,12 +1500,12 @@ msgstr[0] "그룹 {included}개 병합"
 
 #. Translators: {groups} is "{count} verified duplicate group(s)" and
 #. {tracks} is "{count} track(s)".
-#: crates/app_runtime/src/notifications.rs:823
+#: crates/app_runtime/src/notifications.rs:833
 #, rust-format
 msgid "Merged {groups}, removing {tracks}."
 msgstr "{groups}을(를) 병합하고 {tracks}을(를) 제거했습니다."
 
-#: crates/app_runtime/src/notifications.rs:809
+#: crates/app_runtime/src/notifications.rs:819
 #, rust-format
 msgid "Merging verified duplicates ({completed}/{total})..."
 msgstr "확인된 중복 항목 병합 중({completed}/{total})…"
@@ -1630,12 +1630,12 @@ msgstr ""
 "아직 아티스트가 없습니다. 아티스트별로 동기화하려면 아티스트 태그가 있는 음악"
 "을 추가하십시오."
 
-#: crates/app_runtime/src/notifications.rs:703
+#: crates/app_runtime/src/notifications.rs:713
 #, rust-format
 msgid "No audio files were found."
 msgstr "오디오 파일을 찾지 못했습니다."
 
-#: crates/app_runtime/src/notifications.rs:711
+#: crates/app_runtime/src/notifications.rs:721
 #, rust-format
 msgid "No changes."
 msgstr "변경 사항 없음."
@@ -1645,7 +1645,7 @@ msgstr "변경 사항 없음."
 msgid "No cover art found for this track."
 msgstr "이 트랙의 커버 아트를 찾지 못했습니다."
 
-#: crates/app_runtime/src/notifications.rs:760
+#: crates/app_runtime/src/notifications.rs:770
 #, rust-format
 msgid "No free file name was left for it in the library folder."
 msgstr "보관함 폴더에 사용할 수 있는 파일 이름이 남아 있지 않았습니다."
@@ -1745,7 +1745,7 @@ msgstr "Ogg 오디오 파일"
 msgid "On-drive format"
 msgstr "기기 저장 형식"
 
-#: crates/app_runtime/src/notifications.rs:1024
+#: crates/app_runtime/src/notifications.rs:1034
 #, rust-format
 msgid ""
 "One or more of the selected files is missing from disk. Restore or remove "
@@ -1759,7 +1759,14 @@ msgstr ""
 msgid "Online"
 msgstr "온라인"
 
-#: crates/app_runtime/src/notifications.rs:626
+#. Translators: {changes} is a list such as "3 updated, 2 not
+#. found, 1 already complete, 1 failed", counting tracks.
+#: crates/app_runtime/src/notifications.rs:621
+#, rust-format
+msgid "Online retrieval complete: {changes}."
+msgstr "온라인 검색 완료: {changes}."
+
+#: crates/app_runtime/src/notifications.rs:636
 #, rust-format
 msgid ""
 "Online retrieval paused: the library database could not be read or written "
@@ -1818,7 +1825,7 @@ msgstr ""
 "정리된 보관함 모드에는 선택한 보관함 폴더에 파일과 폴더를 만들 권한이 필요합"
 "니다."
 
-#: crates/app_runtime/src/notifications.rs:461
+#: crates/app_runtime/src/notifications.rs:476
 #, rust-format
 msgid "Organizing library..."
 msgstr "보관함 정리 중…"
@@ -1930,7 +1937,7 @@ msgstr "{track_name} 재생에 실패했습니다. 다음 트랙으로 건너뜁
 msgid "Playback failed. Skipping to the next track."
 msgstr "재생에 실패했습니다. 다음 트랙으로 건너뜁니다."
 
-#: crates/app_runtime/src/notifications.rs:1101
+#: crates/app_runtime/src/notifications.rs:1111
 #, rust-format
 msgid "Playback is not available."
 msgstr "재생을 사용할 수 없습니다."
@@ -1979,7 +1986,7 @@ msgstr "환경 설정"
 msgid "Preferences (Ctrl+,)"
 msgstr "환경 설정(Ctrl+,)"
 
-#: crates/app_runtime/src/notifications.rs:1141
+#: crates/app_runtime/src/notifications.rs:1151
 #, rust-format
 msgid "Preparing tracks ({completed}/{total})…"
 msgstr "트랙 준비 중({completed}/{total})…"
@@ -2108,7 +2115,7 @@ msgstr ""
 "MusicBrainz, Cover Art Archive, Deezer, iTunes Search API, LRClib을 통한 원"
 "격 아트워크 및 메타데이터 가져오기"
 
-#: crates/app_runtime/src/notifications.rs:1108
+#: crates/app_runtime/src/notifications.rs:1118
 #, rust-format
 msgid "Remote artwork retrieval is not available in this build."
 msgstr "이 빌드에서는 원격 아트워크 가져오기를 사용할 수 없습니다."
@@ -2140,7 +2147,7 @@ msgstr "대기열에서 제거"
 msgid "Remove rule"
 msgstr "규칙 제거"
 
-#: crates/app_runtime/src/notifications.rs:1153
+#: crates/app_runtime/src/notifications.rs:1163
 #, rust-format
 msgid "Removing tracks ({completed}/{total})…"
 msgstr "트랙 제거 중({completed}/{total})…"
@@ -2178,27 +2185,13 @@ msgstr "문제 보고"
 msgid "Reset"
 msgstr "초기화"
 
-#: crates/app_runtime/src/notifications.rs:593
-#, rust-format
-msgid "Retrieved online data for {completed} track."
-msgid_plural "Retrieved online data for {completed} tracks."
-msgstr[0] "트랙 {completed}개의 온라인 데이터를 가져왔습니다."
-
-#. Translators: {tracks} is "{count} track(s)" and {skipped} is
-#. "{count} track(s) skipped", as in "Retrieved online data for
-#. 40 tracks, 2 tracks skipped."
-#: crates/app_runtime/src/notifications.rs:604
-#, rust-format
-msgid "Retrieved online data for {tracks}, {skipped}."
-msgstr "{tracks}의 온라인 데이터를 가져왔습니다. {skipped}."
-
 #: crates/ui_gtk/src/sidebar/row_context.rs:185
 #: crates/ui_gtk/src/track_context.rs:677
 #, rust-format
 msgid "Retrieve…"
 msgstr "가져오기…"
 
-#: crates/app_runtime/src/notifications.rs:583
+#: crates/app_runtime/src/notifications.rs:598
 #, rust-format
 msgid "Retrieving online data ({completed}/{total})..."
 msgstr "온라인 데이터 가져오는 중({completed}/{total})…"
@@ -2248,32 +2241,32 @@ msgstr "저장된 열을 읽지 못했습니다. 기본 열이 표시됩니다."
 msgid "Scan"
 msgstr "검사"
 
-#: crates/app_runtime/src/notifications.rs:657
+#: crates/app_runtime/src/notifications.rs:667
 #, rust-format
 msgid "Scan complete: no changes."
 msgstr "검사 완료: 변경 사항 없음."
 
-#: crates/app_runtime/src/notifications.rs:656
+#: crates/app_runtime/src/notifications.rs:666
 #, rust-format
 msgid "Scan complete: {changes}."
 msgstr "검사 완료: {changes}."
 
-#: crates/app_runtime/src/notifications.rs:652
+#: crates/app_runtime/src/notifications.rs:662
 #, rust-format
 msgid "Scan partial: missing-file reconciliation skipped."
 msgstr "일부만 검사됨: 누락 파일 대조를 건너뛰었습니다."
 
-#: crates/app_runtime/src/notifications.rs:649
+#: crates/app_runtime/src/notifications.rs:659
 #, rust-format
 msgid "Scan partial: {changes}; missing-file reconciliation skipped."
 msgstr "일부만 검사됨: {changes}. 누락 파일 대조를 건너뛰었습니다."
 
-#: crates/app_runtime/src/notifications.rs:643
+#: crates/app_runtime/src/notifications.rs:653
 #, rust-format
 msgid "Scan stopped."
 msgstr "검사 중지됨."
 
-#: crates/app_runtime/src/notifications.rs:642
+#: crates/app_runtime/src/notifications.rs:652
 #, rust-format
 msgid "Scan stopped: {changes}."
 msgstr "검사 중지됨: {changes}."
@@ -2283,7 +2276,7 @@ msgstr "검사 중지됨: {changes}."
 msgid "Scanning for duplicate tracks..."
 msgstr "중복 트랙 검사 중…"
 
-#: crates/app_runtime/src/notifications.rs:445
+#: crates/app_runtime/src/notifications.rs:460
 #, rust-format
 msgid "Scanning library..."
 msgstr "보관함 검사 중…"
@@ -2298,7 +2291,7 @@ msgstr "검색"
 msgid "Select all tracks"
 msgstr "모든 트랙 선택"
 
-#: crates/app_runtime/src/notifications.rs:1124
+#: crates/app_runtime/src/notifications.rs:1134
 #, rust-format
 msgid "Select at least one track to import."
 msgstr "가져올 트랙을 하나 이상 선택하십시오."
@@ -2454,19 +2447,19 @@ msgstr "Smart Shuffle: 재구성한 색인을 저장하지 못했습니다."
 msgid "Smart Shuffle: failed to serialise the rebuilt index."
 msgstr "Smart Shuffle: 재구성한 색인을 직렬화하지 못했습니다."
 
-#: crates/app_runtime/src/notifications.rs:912
+#: crates/app_runtime/src/notifications.rs:922
 #, rust-format
 msgid "Some changes could not be mirrored to audio files. Sustain will retry."
 msgstr ""
 "일부 변경 사항을 오디오 파일에 반영하지 못했습니다. Sustain이 다시 시도합니"
 "다."
 
-#: crates/app_runtime/src/notifications.rs:796
+#: crates/app_runtime/src/notifications.rs:806
 #, rust-format
 msgid "Some empty folders could not be removed."
 msgstr "일부 빈 폴더를 제거하지 못했습니다."
 
-#: crates/app_runtime/src/notifications.rs:904
+#: crates/app_runtime/src/notifications.rs:914
 #, rust-format
 msgid "Some empty managed-library folders could not be removed."
 msgstr "관리 보관함의 일부 빈 폴더를 제거하지 못했습니다."
@@ -2488,7 +2481,7 @@ msgstr ""
 msgid "Some selected tracks could not be updated."
 msgstr "선택한 트랙 중 일부를 업데이트하지 못했습니다."
 
-#: crates/app_runtime/src/notifications.rs:916
+#: crates/app_runtime/src/notifications.rs:926
 #, rust-format
 msgid ""
 "Some track changes could not be read from the library database. Sustain will "
@@ -2548,7 +2541,7 @@ msgstr ""
 "받은 Linux 기본 음악 보관함 겸 플레이어입니다. 빠른 기본 표 보기를 중심으로 "
 "재생 목록, 스마트 재생 목록, 별점, 청취 통계, 검색을 충실히 지원합니다."
 
-#: crates/app_runtime/src/notifications.rs:855
+#: crates/app_runtime/src/notifications.rs:865
 #, rust-format
 msgid ""
 "Sustain retained recovery files because cleanup could not finish safely."
@@ -2574,12 +2567,12 @@ msgstr "동기화 및 제거"
 msgid "Sync anyway"
 msgstr "그래도 동기화"
 
-#: crates/app_runtime/src/notifications.rs:1230
+#: crates/app_runtime/src/notifications.rs:1240
 #, rust-format
 msgid "Sync complete: {changes}."
 msgstr "동기화 완료: {changes}."
 
-#: crates/app_runtime/src/notifications.rs:1232
+#: crates/app_runtime/src/notifications.rs:1242
 #, rust-format
 msgid "Sync complete: {changes}; {unplayable}."
 msgstr "동기화 완료: {changes}. {unplayable}."
@@ -2589,17 +2582,17 @@ msgstr "동기화 완료: {changes}. {unplayable}."
 msgid "Sync device"
 msgstr "기기 동기화"
 
-#: crates/app_runtime/src/notifications.rs:1236
+#: crates/app_runtime/src/notifications.rs:1246
 #, rust-format
 msgid "Sync partial: {changes}."
 msgstr "일부만 동기화됨: {changes}."
 
-#: crates/app_runtime/src/notifications.rs:1238
+#: crates/app_runtime/src/notifications.rs:1248
 #, rust-format
 msgid "Sync partial: {changes}; {unplayable}."
 msgstr "일부만 동기화됨: {changes}. {unplayable}."
 
-#: crates/app_runtime/src/notifications.rs:1184
+#: crates/app_runtime/src/notifications.rs:1194
 #, rust-format
 msgid "Sync stopped: {changes}."
 msgstr "동기화 중지됨: {changes}."
@@ -2621,7 +2614,7 @@ msgstr[0] ""
 "동기화하면 선택한 재생 목록에 더 이상 없는 트랙 {count}개가 이 기기에서 제거"
 "됩니다."
 
-#: crates/app_runtime/src/notifications.rs:1133
+#: crates/app_runtime/src/notifications.rs:1143
 #, rust-format
 msgid "Syncing {label}…"
 msgstr "{label} 동기화 중…"
@@ -2642,12 +2635,12 @@ msgstr "이 트랙의 모든 태그와 별점 사용"
 msgid "That device is no longer connected."
 msgstr "해당 기기가 더 이상 연결되어 있지 않습니다."
 
-#: crates/app_runtime/src/notifications.rs:1091
+#: crates/app_runtime/src/notifications.rs:1101
 #, rust-format
 msgid "That file is already attached to another library track."
 msgstr "해당 파일은 이미 보관함의 다른 트랙에 연결되어 있습니다."
 
-#: crates/app_runtime/src/notifications.rs:1039
+#: crates/app_runtime/src/notifications.rs:1049
 #, rust-format
 msgid "That folder could not be opened; the library folder is unchanged."
 msgstr "해당 폴더를 열지 못했습니다. 보관함 폴더는 바뀌지 않습니다."
@@ -2683,7 +2676,7 @@ msgid_plural ""
 msgstr[0] ""
 "트랙 {count}개 모두 이미 키 감지가 되어 있어 대기열에 넣을 항목이 없습니다."
 
-#: crates/app_runtime/src/notifications.rs:1122
+#: crates/app_runtime/src/notifications.rs:1132
 #, rust-format
 msgid "The CD could not be imported."
 msgstr "CD를 가져오지 못했습니다."
@@ -2698,7 +2691,7 @@ msgstr "YouTube 오디오 다운로드가 Sustain의 시간 제한을 넘었습�
 msgid "The YouTube audio download was cancelled."
 msgstr "YouTube 오디오 다운로드가 취소되었습니다."
 
-#: crates/app_runtime/src/notifications.rs:1114
+#: crates/app_runtime/src/notifications.rs:1124
 #, rust-format
 msgid "The artwork is unsupported, corrupt, or exceeds Sustain's size limits."
 msgstr ""
@@ -2746,12 +2739,12 @@ msgstr ""
 msgid "The clipboard holds no image."
 msgstr "클립보드에 이미지가 없습니다."
 
-#: crates/app_runtime/src/notifications.rs:1120
+#: crates/app_runtime/src/notifications.rs:1130
 #, rust-format
 msgid "The disc changed. Re-insert the original disc and try again."
 msgstr "디스크가 바뀌었습니다. 원래 디스크를 다시 넣고 다시 시도하십시오."
 
-#: crates/app_runtime/src/notifications.rs:1127
+#: crates/app_runtime/src/notifications.rs:1137
 #, rust-format
 msgid "The disc is being imported. Play it once the import is done."
 msgstr "디스크를 가져오는 중입니다. 가져오기가 끝나면 재생하십시오."
@@ -2766,12 +2759,12 @@ msgstr "YouTube에서 다운로드한 대체 파일이 Sustain의 크기 제한�
 msgid "The downloaded audio could not be published safely."
 msgstr "다운로드한 오디오를 안전하게 게시하지 못했습니다."
 
-#: crates/app_runtime/src/notifications.rs:1082
+#: crates/app_runtime/src/notifications.rs:1092
 #, rust-format
 msgid "The downloaded audio could not safely replace this track."
 msgstr "다운로드한 오디오로 이 트랙을 안전하게 교체하지 못했습니다."
 
-#: crates/app_runtime/src/notifications.rs:1021
+#: crates/app_runtime/src/notifications.rs:1031
 #, rust-format
 msgid "The duplicate tracks could not be consolidated safely."
 msgstr "중복 트랙을 안전하게 통합하지 못했습니다."
@@ -2789,46 +2782,46 @@ msgid ""
 msgstr ""
 "가져온 커버 아트가 지원되지 않거나 손상되었거나 너무 커서 거부되었습니다."
 
-#: crates/app_runtime/src/notifications.rs:1111
+#: crates/app_runtime/src/notifications.rs:1121
 #, rust-format
 msgid "The fetched cover was not used: the track's artwork changed meanwhile."
 msgstr ""
 "가져온 아트워크를 사용하지 않았습니다. 그 사이 트랙의 아트워크가 바뀌었습니"
 "다."
 
-#: crates/app_runtime/src/notifications.rs:754
+#: crates/app_runtime/src/notifications.rs:764
 #, rust-format
 msgid "The file could not be read."
 msgstr "파일을 읽지 못했습니다."
 
-#: crates/app_runtime/src/notifications.rs:1043
+#: crates/app_runtime/src/notifications.rs:1053
 #, rust-format
 msgid "The files could not be added to the library."
 msgstr "파일을 보관함에 추가하지 못했습니다."
 
-#: crates/app_runtime/src/notifications.rs:1053
+#: crates/app_runtime/src/notifications.rs:1063
 #, rust-format
 msgid "The folder name is not valid."
 msgstr "폴더 이름이 올바르지 않습니다."
 
-#: crates/app_runtime/src/notifications.rs:1018
+#: crates/app_runtime/src/notifications.rs:1028
 #, rust-format
 msgid "The library could not be organized."
 msgstr "보관함을 정리하지 못했습니다."
 
-#: crates/app_runtime/src/notifications.rs:769
+#: crates/app_runtime/src/notifications.rs:779
 #, rust-format
 msgid ""
 "The library could not record it, and its copy could not be removed from the "
 "library folder."
 msgstr "보관함에 기록할 수 없었고, 사본을 보관함 폴더에서 제거하지 못했습니다."
 
-#: crates/app_runtime/src/notifications.rs:766
+#: crates/app_runtime/src/notifications.rs:776
 #, rust-format
 msgid "The library could not record it, so its copy was removed."
 msgstr "보관함에 기록할 수 없어 사본을 제거했습니다."
 
-#: crates/app_runtime/src/notifications.rs:1030
+#: crates/app_runtime/src/notifications.rs:1040
 #, rust-format
 msgid "The library database could not be updated."
 msgstr "보관함 데이터베이스를 업데이트하지 못했습니다."
@@ -2838,7 +2831,7 @@ msgstr "보관함 데이터베이스를 업데이트하지 못했습니다."
 msgid "The music library could not be loaded."
 msgstr "음악 보관함을 불러오지 못했습니다."
 
-#: crates/app_runtime/src/notifications.rs:1046
+#: crates/app_runtime/src/notifications.rs:1056
 #, rust-format
 msgid "The music library is still loading."
 msgstr "음악 보관함을 아직 불러오는 중입니다."
@@ -2853,27 +2846,27 @@ msgstr "일수는 1 이상이어야 합니다."
 msgid "The organized library path must be a folder."
 msgstr "정리된 보관함 경로는 폴더여야 합니다."
 
-#: crates/app_runtime/src/notifications.rs:1063
+#: crates/app_runtime/src/notifications.rs:1073
 #, rust-format
 msgid "The playlist could not be updated."
 msgstr "재생 목록을 업데이트하지 못했습니다."
 
-#: crates/app_runtime/src/notifications.rs:1066
+#: crates/app_runtime/src/notifications.rs:1076
 #, rust-format
 msgid "The playlist folder could not be updated."
 msgstr "재생 목록 폴더를 업데이트하지 못했습니다."
 
-#: crates/app_runtime/src/notifications.rs:1051
+#: crates/app_runtime/src/notifications.rs:1061
 #, rust-format
 msgid "The playlist name is not valid."
 msgstr "재생 목록 이름이 올바르지 않습니다."
 
-#: crates/app_runtime/src/notifications.rs:1088
+#: crates/app_runtime/src/notifications.rs:1098
 #, rust-format
 msgid "The replacement track file could not be used."
 msgstr "대체 트랙 파일을 사용할 수 없습니다."
 
-#: crates/app_runtime/src/notifications.rs:1015
+#: crates/app_runtime/src/notifications.rs:1025
 #, rust-format
 msgid "The selected folder could not be scanned."
 msgstr "선택한 폴더를 검사하지 못했습니다."
@@ -2945,22 +2938,22 @@ msgstr ""
 "선택한 보관함 폴더는 정리된 보관함 모드에 필요한 하드 링크 이동을 지원하지 않"
 "습니다."
 
-#: crates/app_runtime/src/notifications.rs:1072
+#: crates/app_runtime/src/notifications.rs:1082
 #, rust-format
 msgid "The smart playlist could not be updated."
 msgstr "스마트 재생 목록을 업데이트하지 못했습니다."
 
-#: crates/app_runtime/src/notifications.rs:1056
+#: crates/app_runtime/src/notifications.rs:1066
 #, rust-format
 msgid "The smart playlist name is not valid."
 msgstr "스마트 재생 목록 이름이 올바르지 않습니다."
 
-#: crates/app_runtime/src/notifications.rs:1105
+#: crates/app_runtime/src/notifications.rs:1115
 #, rust-format
 msgid "The track could not be moved to trash."
 msgstr "트랙을 휴지통으로 옮기지 못했습니다."
 
-#: crates/app_runtime/src/notifications.rs:1049
+#: crates/app_runtime/src/notifications.rs:1059
 #, rust-format
 msgid "The track metadata could not be updated."
 msgstr "트랙 메타데이터를 업데이트하지 못했습니다."
@@ -2970,14 +2963,14 @@ msgstr "트랙 메타데이터를 업데이트하지 못했습니다."
 msgid "The track was located, but empty library folders could not be removed."
 msgstr "트랙을 찾았지만 빈 보관함 폴더를 제거하지 못했습니다."
 
-#: crates/app_runtime/src/notifications.rs:923
+#: crates/app_runtime/src/notifications.rs:933
 #, rust-format
 msgid ""
 "The tracks could not be checked against the library folder; they will be "
 "checked at the next start."
 msgstr "보관함 폴더에서 트랙을 확인하지 못했습니다. 다음 시작 시 확인합니다."
 
-#: crates/app_runtime/src/notifications.rs:908
+#: crates/app_runtime/src/notifications.rs:918
 #, rust-format
 msgid ""
 "The waveform cache could not be opened. Waveforms will not be kept this "
@@ -2993,7 +2986,7 @@ msgstr ""
 "오디오로 확인한 결과 이 그룹들은 각각 같은 녹음의 사본입니다. 각 그룹은 표시"
 "된 선택 사항을 유지한 채 하나의 트랙으로 병합됩니다."
 
-#: crates/app_runtime/src/notifications.rs:1036
+#: crates/app_runtime/src/notifications.rs:1046
 #, rust-format
 msgid "There is no folder at that path; the library folder is unchanged."
 msgstr "해당 경로에 폴더가 없습니다. 보관함 폴더는 바뀌지 않습니다."
@@ -3013,7 +3006,7 @@ msgstr "이 기기는 데스크톱에서 꺼낼 수 없습니다."
 msgid "This device's selection is empty."
 msgstr "이 기기의 선택 항목이 비어 있습니다."
 
-#: crates/app_runtime/src/notifications.rs:1166
+#: crates/app_runtime/src/notifications.rs:1176
 #, rust-format
 msgid ""
 "This drive holds a Pioneer export Sustain did not write, or one a player "
@@ -3101,7 +3094,7 @@ msgstr "총 트랙 수"
 msgid "Track audio replaced from YouTube."
 msgstr "YouTube에서 트랙 오디오를 교체했습니다."
 
-#: crates/app_runtime/src/notifications.rs:1103
+#: crates/app_runtime/src/notifications.rs:1113
 #, rust-format
 msgid "Track file is missing."
 msgstr "트랙 파일이 없습니다."
@@ -3215,12 +3208,12 @@ msgstr "아트워크 미리 보기를 기다리는 중"
 msgid "Waveform"
 msgstr "파형"
 
-#: crates/app_runtime/src/notifications.rs:1151
+#: crates/app_runtime/src/notifications.rs:1161
 #, rust-format
 msgid "Writing device database…"
 msgstr "기기 데이터베이스 쓰는 중…"
 
-#: crates/app_runtime/src/notifications.rs:1150
+#: crates/app_runtime/src/notifications.rs:1160
 #, rust-format
 msgid "Writing playlists…"
 msgstr "재생 목록 쓰는 중…"
@@ -3254,24 +3247,24 @@ msgstr "추가한 연도"
 msgid "Yes"
 msgstr "예"
 
-#: crates/app_runtime/src/notifications.rs:1079
+#: crates/app_runtime/src/notifications.rs:1089
 #, rust-format
 msgid "YouTube audio replacement is not available."
 msgstr "YouTube 오디오 교체를 사용할 수 없습니다."
 
-#: crates/app_runtime/src/notifications.rs:1085
+#: crates/app_runtime/src/notifications.rs:1095
 #, rust-format
 msgid ""
 "YouTube replacement is available only for present tracks at or below 192 "
 "kbps."
 msgstr "YouTube 교체는 192kbps 이하의 실제로 있는 트랙에만 사용할 수 있습니다."
 
-#: crates/app_runtime/src/notifications.rs:1075
+#: crates/app_runtime/src/notifications.rs:1085
 #, rust-format
 msgid "Your settings could not be loaded."
 msgstr "설정을 불러오지 못했습니다."
 
-#: crates/app_runtime/src/notifications.rs:1077
+#: crates/app_runtime/src/notifications.rs:1087
 #, rust-format
 msgid "Your settings could not be saved."
 msgstr "설정을 저장하지 못했습니다."
@@ -3539,7 +3532,7 @@ msgstr "가장 최근에 재생한 순"
 msgid "music;player;library;audio;"
 msgstr "음악;플레이어;보관함;오디오;"
 
-#: crates/app_runtime/src/notifications.rs:681
+#: crates/app_runtime/src/notifications.rs:691
 #, rust-format
 msgid "no tracks added"
 msgstr "추가된 트랙 없음"
@@ -3648,42 +3641,49 @@ msgstr "yt-dlp가 지원되지 않거나 안전하지 않은 오디오 파일을
 
 #. Translators: both halves are the two phrases below, as in
 #. "Analyzed 12 tracks; 2 tracks could not be analyzed."
-#: crates/app_runtime/src/notifications.rs:547
+#: crates/app_runtime/src/notifications.rs:562
 #, rust-format
 msgid "{analyzed}; {not_analyzed}."
 msgstr "{analyzed}. {not_analyzed}."
 
 #. Translators: {changes} is a list such as "3 tracks added,
 #. 1 duplicate file skipped", made a sentence of its own.
-#: crates/app_runtime/src/notifications.rs:708
+#: crates/app_runtime/src/notifications.rs:718
 #, rust-format
 msgid "{changes}."
 msgstr "{changes}."
 
 #. Translators: an item of a list of what happened to the library's
 #. tracks, as in "Scan complete: 3 added, 1 updated."
-#: crates/app_runtime/src/notifications.rs:393
+#: crates/app_runtime/src/notifications.rs:394
 #, rust-format
 msgctxt "count of tracks"
 msgid "{count} added"
 msgid_plural "{count} added"
 msgstr[0] "{count}개 추가됨"
 
-#: crates/app_runtime/src/notifications.rs:407
+#: crates/app_runtime/src/notifications.rs:420
+#, rust-format
+msgctxt "count of tracks"
+msgid "{count} already complete"
+msgid_plural "{count} already complete"
+msgstr[0] "{count}개 이미 완료됨"
+
+#: crates/app_runtime/src/notifications.rs:414
 #, rust-format
 msgctxt "count of tracks"
 msgid "{count} already organized"
 msgid_plural "{count} already organized"
 msgstr[0] "{count}개 이미 정리됨"
 
-#: crates/app_runtime/src/notifications.rs:895
+#: crates/app_runtime/src/notifications.rs:905
 #, rust-format
 msgctxt "count of duplicate groups"
 msgid "{count} cancelled"
 msgid_plural "{count} cancelled"
 msgstr[0] "{count}개 취소됨"
 
-#: crates/app_runtime/src/notifications.rs:877
+#: crates/app_runtime/src/notifications.rs:887
 #, rust-format
 msgctxt "count of duplicate groups"
 msgid "{count} changed since the preview"
@@ -3702,7 +3702,7 @@ msgid "{count} character"
 msgid_plural "{count} characters"
 msgstr[0] "{count}자"
 
-#: crates/app_runtime/src/notifications.rs:411
+#: crates/app_runtime/src/notifications.rs:424
 #, rust-format
 msgctxt "count of tracks"
 msgid "{count} copied"
@@ -3715,7 +3715,7 @@ msgid "{count} day"
 msgid_plural "{count} days"
 msgstr[0] "{count}일"
 
-#: crates/app_runtime/src/notifications.rs:731
+#: crates/app_runtime/src/notifications.rs:741
 #, rust-format
 msgid "{count} duplicate file skipped"
 msgid_plural "{count} duplicate files skipped"
@@ -3746,21 +3746,21 @@ msgstr[0] ""
 "중복 트랙 {count}개를 통합했습니다. 정리를 안전하게 마치지 못해 Sustain이 복"
 "구 파일을 보존했습니다."
 
-#: crates/app_runtime/src/notifications.rs:889
+#: crates/app_runtime/src/notifications.rs:899
 #, rust-format
 msgctxt "count of duplicate groups"
 msgid "{count} failed"
 msgid_plural "{count} failed"
 msgstr[0] "{count}개 실패"
 
-#: crates/app_runtime/src/notifications.rs:400
+#: crates/app_runtime/src/notifications.rs:401
 #, rust-format
 msgctxt "count of tracks"
 msgid "{count} failed"
 msgid_plural "{count} failed"
 msgstr[0] "{count}개 실패"
 
-#: crates/app_runtime/src/notifications.rs:741
+#: crates/app_runtime/src/notifications.rs:751
 #, rust-format
 msgid "{count} file could not be imported"
 msgid_plural "{count} files could not be imported"
@@ -3795,7 +3795,7 @@ msgid "{count} minute"
 msgid_plural "{count} minutes"
 msgstr[0] "{count}분"
 
-#: crates/app_runtime/src/notifications.rs:398
+#: crates/app_runtime/src/notifications.rs:399
 #: crates/ui_gtk/src/device_panel.rs:801
 #, rust-format
 msgctxt "count of tracks"
@@ -3823,19 +3823,26 @@ msgstr "키 없음 {count}개"
 msgid "{count} missing waveform"
 msgstr "파형 없음 {count}개"
 
-#: crates/app_runtime/src/notifications.rs:401
+#: crates/app_runtime/src/notifications.rs:408
 #, rust-format
 msgctxt "count of tracks"
 msgid "{count} moved"
 msgid_plural "{count} moved"
 msgstr[0] "{count}개 이동됨"
 
-#: crates/app_runtime/src/notifications.rs:883
+#: crates/app_runtime/src/notifications.rs:893
 #, rust-format
 msgctxt "count of duplicate groups"
 msgid "{count} no longer verified"
 msgid_plural "{count} no longer verified"
 msgstr[0] "{count}개 더 이상 확인되지 않음"
+
+#: crates/app_runtime/src/notifications.rs:404
+#, rust-format
+msgctxt "count of tracks"
+msgid "{count} not found"
+msgid_plural "{count} not found"
+msgstr[0] "{count}개 찾지 못함"
 
 #: crates/ui_gtk/src/duplicate_consolidation.rs:137
 #, rust-format
@@ -3852,14 +3859,14 @@ msgid "{count} other genre — {size}"
 msgid_plural "{count} other genres — {size}"
 msgstr[0] "기타 장르 {count}개 — {size}"
 
-#: crates/app_runtime/src/notifications.rs:403
+#: crates/app_runtime/src/notifications.rs:410
 #, rust-format
 msgctxt "count of tracks"
 msgid "{count} pending"
 msgid_plural "{count} pending"
 msgstr[0] "{count}개 대기 중"
 
-#: crates/app_runtime/src/notifications.rs:413
+#: crates/app_runtime/src/notifications.rs:426
 #, rust-format
 msgctxt "count of tracks"
 msgid "{count} removed"
@@ -3879,8 +3886,7 @@ msgid "{count} star"
 msgid_plural "{count} stars"
 msgstr[0] "별 {count}개"
 
-#: crates/app_runtime/src/notifications.rs:606
-#: crates/app_runtime/src/notifications.rs:833
+#: crates/app_runtime/src/notifications.rs:843
 #, rust-format
 msgid "{count} track"
 msgid_plural "{count} tracks"
@@ -3893,14 +3899,14 @@ msgid "{count} track"
 msgid_plural "{count} tracks"
 msgstr[0] "트랙 {count}개"
 
-#: crates/app_runtime/src/notifications.rs:721
-#: crates/app_runtime/src/notifications.rs:1212
+#: crates/app_runtime/src/notifications.rs:731
+#: crates/app_runtime/src/notifications.rs:1222
 #, rust-format
 msgid "{count} track added"
 msgid_plural "{count} tracks added"
 msgstr[0] "트랙 {count}개 추가됨"
 
-#: crates/app_runtime/src/notifications.rs:436
+#: crates/app_runtime/src/notifications.rs:451
 #, rust-format
 msgid "{count} track failed"
 msgid_plural "{count} tracks failed"
@@ -3912,19 +3918,13 @@ msgid "{count} track indexed ({percent}% audio profiled)"
 msgid_plural "{count} tracks indexed ({percent}% audio profiled)"
 msgstr[0] "트랙 {count}개 색인됨(오디오 프로필 {percent}%)"
 
-#: crates/app_runtime/src/notifications.rs:1192
+#: crates/app_runtime/src/notifications.rs:1202
 #, rust-format
 msgid "{count} track left off: the device cannot play its format"
 msgid_plural "{count} tracks left off: the device cannot play their format"
 msgstr[0] "트랙 {count}개 제외됨: 기기에서 해당 형식을 재생할 수 없음"
 
-#: crates/app_runtime/src/notifications.rs:610
-#, rust-format
-msgid "{count} track skipped"
-msgid_plural "{count} tracks skipped"
-msgstr[0] "트랙 {count}개 건너뜀"
-
-#: crates/app_runtime/src/notifications.rs:395
+#: crates/app_runtime/src/notifications.rs:396
 #, rust-format
 msgctxt "count of tracks"
 msgid "{count} updated"
@@ -3938,19 +3938,19 @@ msgid "{count} verified by their audio"
 msgid_plural "{count} verified by their audio"
 msgstr[0] "{count}개 오디오로 확인됨"
 
-#: crates/app_runtime/src/notifications.rs:826
+#: crates/app_runtime/src/notifications.rs:836
 #, rust-format
 msgid "{count} verified duplicate group"
 msgid_plural "{count} verified duplicate groups"
 msgstr[0] "확인된 중복 그룹 {count}개"
 
-#: crates/app_runtime/src/notifications.rs:558
+#: crates/app_runtime/src/notifications.rs:573
 #, rust-format
 msgid "{failed} track could not be analyzed"
 msgid_plural "{failed} tracks could not be analyzed"
 msgstr[0] "트랙 {failed}개를 분석하지 못함"
 
-#: crates/app_runtime/src/notifications.rs:538
+#: crates/app_runtime/src/notifications.rs:553
 #, rust-format
 msgid "{failed} track could not be analyzed."
 msgid_plural "{failed} tracks could not be analyzed."
