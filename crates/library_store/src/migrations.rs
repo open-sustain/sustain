@@ -2375,4 +2375,80 @@ WHERE track_id IN (SELECT id FROM tracks WHERE musical_key IS NOT NULL);
             .collect::<Result<Vec<_>, _>>()
             .expect("tables")
     }
+
+    /// Fingerprint of every shipped migration, in version order. A library
+    /// already at version N ran migration N as it was then; editing it now
+    /// changes nothing for that library, yet the upgrade tests above build
+    /// their old databases from this registry and would not notice (#369).
+    /// A Rust step's body cannot be hashed, so only its kind and
+    /// description are pinned.
+    ///
+    /// A failure here means a shipped migration was edited: revert it and
+    /// append a new migration instead. A new migration appends its own
+    /// fingerprint, which the failure message prints.
+    const SHIPPED_MIGRATION_FINGERPRINTS: &[u64] = &[
+        0xd6c4bca5aabd39c5,
+        0x28fe40d4318127e9,
+        0x47cbeb63dc48519a,
+        0x35563206c534e5c1,
+        0x29c938b0a1e14eeb,
+        0xb2083c557d6d8519,
+        0x9484fd9912b28227,
+        0x8d2cd3f764c03ac3,
+        0xc3378689ba044cde,
+        0xc744386b281c4ad9,
+        0xf391c5413e43bb8b,
+        0xec098c0575b31c88,
+        0xef424fe83c2fa411,
+        0xf81532533c51bcc3,
+        0xf44fd12200e0f9f0,
+        0x5d37d31f9f570a2f,
+        0x54d8c38debc1e4de,
+        0xbcc5bbd12c21210e,
+        0xaf1b347dba3917d0,
+        0xe2f655beaf46deab,
+        0xa9dd386bf50ed31f,
+        0xbe9316c60a0bb317,
+        0xc5b35b4f896808a8,
+        0xbe70024d8ca730f3,
+        0x58747e3863d8be1c,
+        0x370d1352548850b5,
+    ];
+
+    fn migration_fingerprint(migration: &Migration) -> u64 {
+        use sha2::{Digest, Sha256};
+
+        let mut hasher = Sha256::new();
+        hasher.update(migration.version.to_le_bytes());
+        hasher.update(migration.description.as_bytes());
+        match migration.step {
+            MigrationStep::Sql(sql) => {
+                hasher.update(b"sql");
+                hasher.update(sql.as_bytes());
+            }
+            MigrationStep::Rust(_) => hasher.update(b"rust"),
+        }
+        let digest = hasher.finalize();
+        u64::from_le_bytes(digest[..8].try_into().expect("eight bytes"))
+    }
+
+    #[test]
+    fn shipped_migrations_are_never_edited() {
+        let actual: Vec<u64> = MIGRATIONS.iter().map(migration_fingerprint).collect();
+        let listing = actual
+            .iter()
+            .map(|fingerprint| format!("0x{fingerprint:016x},"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(
+            &actual[..SHIPPED_MIGRATION_FINGERPRINTS.len().min(actual.len())],
+            SHIPPED_MIGRATION_FINGERPRINTS,
+            "a shipped migration was edited; revert it and append a new migration instead",
+        );
+        assert_eq!(
+            actual.len(),
+            SHIPPED_MIGRATION_FINGERPRINTS.len(),
+            "pin every migration's fingerprint; the registry's are:\n{listing}",
+        );
+    }
 }
