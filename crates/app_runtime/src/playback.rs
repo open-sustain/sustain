@@ -125,8 +125,13 @@ impl ApplicationRuntime {
             NotificationSeverity::Error,
             self.playback_backend_error_text(&error),
         );
-        // The failed track did not end: replaying it under Repeat One
-        // would fail again, forever.
+        // A start that failed left the cursor on the track before it:
+        // advance from the failed track, or Next would offer it again,
+        // forever. The failed track did not end either: replaying it
+        // under Repeat One would fail again, forever.
+        if let Some(failed) = error.track_id {
+            let _moved = self.playback_queue.move_to_track(failed);
+        }
         self.play_track_after_current()
     }
 
