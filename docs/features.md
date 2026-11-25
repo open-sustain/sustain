@@ -1325,6 +1325,7 @@ yield while a text entry has focus.
 | `Ctrl+I`         | Get Info on the current selection     |
 | `Ctrl+R`         | Reveal the selected track in Files    |
 | `Ctrl+,`         | Preferences                           |
+| `F1`             | Help (opens the documentation)        |
 | `Ctrl+?`         | Keyboard shortcuts overlay            |
 | `Ctrl+W`         | Close window                          |
 | `Ctrl+Q`         | Quit Sustain                          |

@@ -155,9 +155,18 @@ fn centered_helper_label(text: &str) -> gtk::Label {
 /// Opens `url` over the window `button` is in, found when it is clicked:
 /// a handler capturing that window would keep it alive once closed (#370).
 fn launch_uri(button: &gtk::Button, url: &'static str) {
-    let parent = button.root().and_downcast::<gtk::Window>();
+    launch_uri_over(button.root().and_downcast::<gtk::Window>().as_ref(), url);
+}
+
+/// Opens the documentation in the default browser, over `parent`: what
+/// F1 does from anywhere in Sustain.
+pub(crate) fn open_documentation(parent: Option<&gtk::Window>) {
+    launch_uri_over(parent, DOCUMENTATION_URL);
+}
+
+fn launch_uri_over(parent: Option<&gtk::Window>, url: &'static str) {
     let launcher = gtk::UriLauncher::new(url);
-    launcher.launch(parent.as_ref(), None::<&gio::Cancellable>, move |result| {
+    launcher.launch(parent, None::<&gio::Cancellable>, move |result| {
         if let Err(error) = result {
             eprintln!("Sustain: failed to open {url} in the default browser ({error:?})");
         }

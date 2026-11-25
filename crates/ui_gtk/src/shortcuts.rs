@@ -79,12 +79,15 @@ pub(crate) fn install_global_shortcuts(context: GlobalShortcutContext) {
     install_select_all(&context, &mut focus_aware_actions);
     install_close_window(&context);
     install_quit(&context);
+    install_help(&context);
     install_shortcuts_overlay(&context);
     install_focus_aware_action_state(&context.window, focus_aware_actions);
 }
 
 #[derive(Clone, Copy)]
 struct ShortcutDescription {
+    /// The detailed action name, without its `app.` prefix: the name the
+    /// accelerator is registered on and the overlay row looks it up by.
     action: &'static str,
     accelerator: &'static str,
     /// The localized title the shortcuts overlay lists it under, looked up
@@ -131,11 +134,12 @@ const SELECT_ALL: ShortcutDescription =
 const CLOSE_WINDOW: ShortcutDescription =
     shortcut("close-window", "<Primary>w", || gettext("Close window"));
 const QUIT: ShortcutDescription = shortcut("quit", "<Primary>q", || gettext("Quit Sustain"));
+const HELP: ShortcutDescription = shortcut("help", "F1", || gettext("Help"));
 const SHOW_SHORTCUTS: ShortcutDescription = shortcut("show-shortcuts", "<Primary>question", || {
     gettext("Keyboard shortcuts")
 });
-pub(crate) const PREFERENCES_ACCELERATOR: &str = "<Primary>comma";
-const PREFERENCES: ShortcutDescription = shortcut("preferences", PREFERENCES_ACCELERATOR, || {
+/// Opens Preferences on its Library tab, the action's string target.
+const PREFERENCES: ShortcutDescription = shortcut("preferences::library", "<Primary>comma", || {
     gettext("Preferences")
 });
 
@@ -154,7 +158,7 @@ const LIBRARY_SHORTCUTS: &[ShortcutDescription] = &[
     SHOW_IN_FOLDER,
 ];
 const APPLICATION_SHORTCUTS: &[ShortcutDescription] =
-    &[PREFERENCES, SHOW_SHORTCUTS, CLOSE_WINDOW, QUIT];
+    &[PREFERENCES, HELP, SHOW_SHORTCUTS, CLOSE_WINDOW, QUIT];
 
 fn install_new_playlist(context: &GlobalShortcutContext) {
     if context.app.lookup_action(NEW_PLAYLIST.action).is_some() {
@@ -424,6 +428,14 @@ fn install_quit(context: &GlobalShortcutContext) {
     });
 }
 
+fn install_help(context: &GlobalShortcutContext) {
+    let window = context.window.downgrade();
+    install_action(&context.app, HELP, move || {
+        let window = window.upgrade();
+        crate::preferences::open_documentation(window.as_ref().map(|window| window.upcast_ref()));
+    });
+}
+
 #[allow(deprecated)]
 fn install_shortcuts_overlay(context: &GlobalShortcutContext) {
     // GtkShortcutsWindow is the GTK-only shortcuts overlay. GTK 4.18
@@ -510,6 +522,15 @@ fn register_action(
 ) {
     app.add_action(action);
     app.set_accels_for_action(&detailed_action_name(shortcut), &[shortcut.accelerator]);
+}
+
+/// Registers Ctrl+, on the Preferences action, which
+/// [`crate::preferences`] installs with its tab target.
+pub(crate) fn register_preferences_accelerator(app: &gtk::Application) {
+    app.set_accels_for_action(
+        &detailed_action_name(PREFERENCES),
+        &[PREFERENCES.accelerator],
+    );
 }
 
 fn detailed_action_name(shortcut: ShortcutDescription) -> String {

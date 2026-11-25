@@ -6,7 +6,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Sustain\n"
 "Report-Msgid-Bugs-To: https://github.com/open-sustain/sustain/issues\n"
-"POT-Creation-Date: 2026-11-21 12:06+0100\n"
+"POT-Creation-Date: 2026-11-25 10:35+0100\n"
 "PO-Revision-Date: 2026-11-16 20:38+0100\n"
 "Last-Translator: Sustain maintainers\n"
 "Language-Team: French\n"
@@ -61,7 +61,7 @@ msgstr "(vide)"
 
 #. Translators: groups the thousands of a large number, as in "49,295".
 #. Use your language's separator, such as "." or a narrow no-break space.
-#: crates/ui_gtk/src/status_bar.rs:514
+#: crates/ui_gtk/src/status_bar.rs:513
 #, rust-format
 msgctxt "thousands separator"
 msgid ","
@@ -130,7 +130,7 @@ msgstr "Une règle de texte nécessite une valeur."
 msgid "AIFF audio file"
 msgstr "Fichier audio AIFF"
 
-#: crates/ui_gtk/src/preferences/mod.rs:361
+#: crates/ui_gtk/src/preferences/mod.rs:362
 #, rust-format
 msgid "About"
 msgstr "À propos"
@@ -212,7 +212,7 @@ msgstr "Artiste de l’album"
 msgid "Album is a compilation of songs by various artists"
 msgstr "L’album est une compilation de morceaux de différents artistes"
 
-#: crates/ui_gtk/src/sidebar.rs:193
+#: crates/ui_gtk/src/sidebar.rs:194
 #, rust-format
 msgid "Albums"
 msgstr "Albums"
@@ -242,7 +242,7 @@ msgstr[0] "Analyser {count} morceau manquant"
 msgstr[1] "Analyser {count} morceaux manquants"
 
 #: crates/ui_gtk/src/device_panel.rs:399
-#: crates/ui_gtk/src/preferences/mod.rs:354
+#: crates/ui_gtk/src/preferences/mod.rs:355
 #, rust-format
 msgid "Analysis"
 msgstr "Analyse"
@@ -284,13 +284,13 @@ msgstr "Analyse des morceaux ({processed}/{total})..."
 msgid "Another background task is already running."
 msgstr "Une autre tâche d’arrière-plan est déjà en cours."
 
-#: crates/ui_gtk/src/shortcuts.rs:458
+#: crates/ui_gtk/src/shortcuts.rs:468
 #, rust-format
 msgctxt "shortcuts group"
 msgid "Application"
 msgstr "Application"
 
-#: crates/ui_gtk/src/cd_import_panel.rs:435
+#: crates/ui_gtk/src/cd_import_panel.rs:436
 #: crates/ui_gtk/src/duplicate_consolidation.rs:798
 #: crates/ui_gtk/src/track_info/details.rs:76
 #: crates/ui_gtk/src/track_info/multi.rs:298
@@ -339,7 +339,7 @@ msgid "Audio"
 msgstr "Audio"
 
 #: crates/app_runtime/src/cd_import/plan.rs:57
-#: crates/ui_gtk/src/cd_import_panel.rs:56 crates/ui_gtk/src/sidebar.rs:606
+#: crates/ui_gtk/src/cd_import_panel.rs:57 crates/ui_gtk/src/sidebar.rs:608
 #, rust-format
 msgid "Audio CD"
 msgstr "CD audio"
@@ -498,7 +498,7 @@ msgstr "Calcul du plan de synchronisation..."
 #: crates/ui_gtk/src/confirmation.rs:25
 #: crates/ui_gtk/src/duplicate_consolidation.rs:218
 #: crates/ui_gtk/src/smart_playlist_editor.rs:468
-#: crates/ui_gtk/src/status_bar.rs:183 crates/ui_gtk/src/status_bar.rs:187
+#: crates/ui_gtk/src/status_bar.rs:182 crates/ui_gtk/src/status_bar.rs:186
 #: crates/ui_gtk/src/track_info/multi.rs:73 crates/ui_gtk/src/track_info.rs:142
 #: crates/ui_gtk/src/verified_duplicates.rs:76
 #: crates/ui_gtk/src/youtube_audio_replacement.rs:75
@@ -506,7 +506,7 @@ msgstr "Calcul du plan de synchronisation..."
 msgid "Cancel"
 msgstr "Annuler"
 
-#: crates/ui_gtk/src/status_bar.rs:232
+#: crates/ui_gtk/src/status_bar.rs:231
 #, rust-format
 msgid "Cancelling..."
 msgstr "Annulation..."
@@ -561,18 +561,18 @@ msgstr "Choisissez un fichier audio pris en charge."
 msgid "Choose folder"
 msgstr "Choisir un dossier"
 
-#: crates/ui_gtk/src/cd_import_panel.rs:310
+#: crates/ui_gtk/src/cd_import_panel.rs:311
 #, rust-format
 msgid "Choose the CD import format"
 msgstr "Choisir le format d’importation des CD"
 
-#: crates/ui_gtk/src/preferences/mod.rs:397
+#: crates/ui_gtk/src/preferences/mod.rs:398
 #: crates/ui_gtk/src/smart_playlist_editor.rs:632
 #, rust-format
 msgid "Close"
 msgstr "Fermer"
 
-#: crates/ui_gtk/src/shortcuts.rs:132
+#: crates/ui_gtk/src/shortcuts.rs:133
 #, rust-format
 msgid "Close window"
 msgstr "Fermer la fenêtre"
@@ -589,7 +589,7 @@ msgstr ""
 "Les modifications des colonnes n'ont pas pu être enregistrées et seront "
 "perdues au redémarrage."
 
-#: crates/ui_gtk/src/track_table.rs:1414
+#: crates/ui_gtk/src/track_table.rs:1416
 #, rust-format
 msgid "Columns"
 msgstr "Colonnes"
@@ -660,12 +660,12 @@ msgstr "Copie des morceaux ({completed}/{total})…"
 msgid "Could not copy the files: {error}."
 msgstr "Impossible de copier les fichiers : {error}."
 
-#: crates/ui_gtk/src/main_window.rs:1467
+#: crates/ui_gtk/src/main_window.rs:1477
 #, rust-format
 msgid "Could not eject the device."
 msgstr "Impossible d’éjecter l’appareil."
 
-#: crates/ui_gtk/src/main_window.rs:1427
+#: crates/ui_gtk/src/main_window.rs:1437
 #, rust-format
 msgid "Could not eject the disc."
 msgstr "Impossible d’éjecter le disque."
@@ -675,7 +675,7 @@ msgstr "Impossible d’éjecter le disque."
 msgid "Could not fetch cover art."
 msgstr "Impossible de récupérer la pochette."
 
-#: crates/ui_gtk/src/main_window.rs:1451
+#: crates/ui_gtk/src/main_window.rs:1461
 #, rust-format
 msgid "Could not find the mounted device to eject."
 msgstr "Impossible de trouver l’appareil monté à éjecter."
@@ -690,7 +690,7 @@ msgstr "Impossible d’ouvrir Discogs : {error}."
 msgid "Could not plan the device sync: {detail}"
 msgstr "Impossible de planifier la synchronisation de l’appareil : {detail}"
 
-#: crates/ui_gtk/src/main_window.rs:1344
+#: crates/ui_gtk/src/main_window.rs:1354
 #, rust-format
 msgid "Could not reach MusicBrainz; using fallback CD metadata."
 msgstr ""
@@ -706,7 +706,7 @@ msgstr "Impossible de rechercher les appareils Android : {error}"
 msgid "Could not show the file's folder: {error}."
 msgstr "Impossible d’afficher le dossier du fichier : {error}."
 
-#: crates/ui_gtk/src/main_window.rs:1482
+#: crates/ui_gtk/src/main_window.rs:1492
 #, rust-format
 msgid "Could not unmount the device."
 msgstr "Impossible de démonter l’appareil."
@@ -833,7 +833,7 @@ msgstr "Échec de la synchronisation de l’appareil : {detail}"
 msgid "Device sync plan unavailable"
 msgstr "Plan de synchronisation de l’appareil indisponible"
 
-#: crates/ui_gtk/src/sidebar.rs:215
+#: crates/ui_gtk/src/sidebar.rs:216
 #, rust-format
 msgid "Devices"
 msgstr "Appareils"
@@ -912,7 +912,7 @@ msgstr "Échec de la recherche de doublons."
 msgid "Duplicate scan unavailable."
 msgstr "Recherche de doublons indisponible."
 
-#: crates/ui_gtk/src/sidebar.rs:195
+#: crates/ui_gtk/src/sidebar.rs:196
 #, rust-format
 msgid "Duplicates"
 msgstr "Doublons"
@@ -934,17 +934,17 @@ msgstr "Durée (secondes)"
 msgid "Edit…"
 msgstr "Modifier…"
 
-#: crates/ui_gtk/src/cd_import_panel.rs:319 crates/ui_gtk/src/sidebar.rs:970
+#: crates/ui_gtk/src/cd_import_panel.rs:320 crates/ui_gtk/src/sidebar.rs:972
 #, rust-format
 msgid "Eject"
 msgstr "Éjecter"
 
-#: crates/ui_gtk/src/preferences/mod.rs:353
+#: crates/ui_gtk/src/preferences/mod.rs:354
 #, rust-format
 msgid "Encoding"
 msgstr "Encodage"
 
-#: crates/ui_gtk/src/cd_import_panel.rs:308
+#: crates/ui_gtk/src/cd_import_panel.rs:309
 #, rust-format
 msgid "Encoding Settings"
 msgstr "Réglages d’encodage"
@@ -1047,7 +1047,7 @@ msgstr ""
 msgid "Files per folder"
 msgstr "Fichiers par dossier"
 
-#: crates/ui_gtk/src/shortcuts.rs:114
+#: crates/ui_gtk/src/shortcuts.rs:115
 #, rust-format
 msgid "Focus search bar"
 msgstr "Aller à la barre de recherche"
@@ -1081,13 +1081,13 @@ msgctxt "smart playlist field"
 msgid "Genre"
 msgstr "Genre"
 
-#: crates/ui_gtk/src/statistics.rs:313
+#: crates/ui_gtk/src/statistics.rs:315
 #, rust-format
 msgctxt "statistics section"
 msgid "Genre"
 msgstr "Genre"
 
-#: crates/ui_gtk/src/shortcuts.rs:115 crates/ui_gtk/src/track_context.rs:263
+#: crates/ui_gtk/src/shortcuts.rs:116 crates/ui_gtk/src/track_context.rs:263
 #, rust-format
 msgid "Get Info"
 msgstr "Lire les informations"
@@ -1117,6 +1117,11 @@ msgstr ""
 msgid "Grouping"
 msgstr "Regroupement"
 
+#: crates/ui_gtk/src/shortcuts.rs:135
+#, rust-format
+msgid "Help"
+msgstr "Aide"
+
 #: crates/ui_gtk/src/titlebar.rs:75
 #, rust-format
 msgid "High volume"
@@ -1127,7 +1132,7 @@ msgstr "Volume élevé"
 msgid "Images"
 msgstr "Images"
 
-#: crates/ui_gtk/src/cd_import_panel.rs:321
+#: crates/ui_gtk/src/cd_import_panel.rs:322
 #, rust-format
 msgid "Import CD"
 msgstr "Importer le CD"
@@ -1158,7 +1163,7 @@ msgid_plural "Imported {imported} tracks from CD."
 msgstr[0] "{imported} morceau importé depuis le CD."
 msgstr[1] "{imported} morceaux importés depuis le CD."
 
-#: crates/ui_gtk/src/sidebar.rs:610
+#: crates/ui_gtk/src/sidebar.rs:612
 #, rust-format
 msgid "Importing"
 msgstr "Importation"
@@ -1211,7 +1216,7 @@ msgstr ""
 msgid "Its tags could not be read."
 msgstr "Ses tags n’ont pas pu être lus."
 
-#: crates/ui_gtk/src/shortcuts.rs:127
+#: crates/ui_gtk/src/shortcuts.rs:128
 #, rust-format
 msgid "Jump to currently playing track"
 msgstr "Aller au morceau en cours de lecture"
@@ -1245,7 +1250,7 @@ msgstr "Détection de la tonalité"
 msgid "Key must be a musical key, such as Am, F#, or 8A."
 msgstr "La tonalité doit être une tonalité musicale, par exemple Am, F# ou 8A."
 
-#: crates/ui_gtk/src/shortcuts.rs:135
+#: crates/ui_gtk/src/shortcuts.rs:137
 #, rust-format
 msgid "Keyboard shortcuts"
 msgstr "Raccourcis clavier"
@@ -1297,12 +1302,12 @@ msgstr "Dernier saut"
 msgid "Left alone: {groups}."
 msgstr "Laissés de côté : {groups}."
 
-#: crates/ui_gtk/src/preferences/mod.rs:352 crates/ui_gtk/src/sidebar.rs:189
+#: crates/ui_gtk/src/preferences/mod.rs:353 crates/ui_gtk/src/sidebar.rs:190
 #, rust-format
 msgid "Library"
 msgstr "Bibliothèque"
 
-#: crates/ui_gtk/src/shortcuts.rs:456
+#: crates/ui_gtk/src/shortcuts.rs:466
 #, rust-format
 msgctxt "shortcuts group"
 msgid "Library"
@@ -1584,12 +1589,12 @@ msgstr "Minimum"
 msgid "Mono"
 msgstr "Mono"
 
-#: crates/ui_gtk/src/statistics.rs:404
+#: crates/ui_gtk/src/statistics.rs:406
 #, rust-format
 msgid "Most liked genres"
 msgstr "Genres les plus appréciés"
 
-#: crates/ui_gtk/src/statistics.rs:382
+#: crates/ui_gtk/src/statistics.rs:384
 #, rust-format
 msgid "Most played genres"
 msgstr "Genres les plus écoutés"
@@ -1601,7 +1606,7 @@ msgstr "Genres les plus écoutés"
 msgid "Move to Trash"
 msgstr "Placer dans la corbeille"
 
-#: crates/ui_gtk/src/sidebar.rs:192
+#: crates/ui_gtk/src/sidebar.rs:193
 #, rust-format
 msgid "Music"
 msgstr "Musique"
@@ -1643,12 +1648,12 @@ msgstr "Nouveau dossier de listes de lecture"
 msgid "New Smart Playlist…"
 msgstr "Nouvelle liste intelligente…"
 
-#: crates/ui_gtk/src/shortcuts.rs:108
+#: crates/ui_gtk/src/shortcuts.rs:109
 #, rust-format
 msgid "New playlist"
 msgstr "Nouvelle liste de lecture"
 
-#: crates/ui_gtk/src/shortcuts.rs:111
+#: crates/ui_gtk/src/shortcuts.rs:112
 #, rust-format
 msgid "New smart playlist"
 msgstr "Nouvelle liste intelligente"
@@ -1663,7 +1668,7 @@ msgstr ""
 "album et morceau. Les morceaux existants sont organisés en arrière-plan "
 "lorsque cette option est activée."
 
-#: crates/ui_gtk/src/shortcuts.rs:124
+#: crates/ui_gtk/src/shortcuts.rs:125
 #, rust-format
 msgid "Next track"
 msgstr "Morceau suivant"
@@ -1685,7 +1690,7 @@ msgstr "Suivant ; clic droit pour afficher la file d’attente"
 msgid "No"
 msgstr "Non"
 
-#: crates/ui_gtk/src/albums.rs:1932
+#: crates/ui_gtk/src/albums.rs:1938
 #, rust-format
 msgid "No albums"
 msgstr "Aucun album"
@@ -1719,12 +1724,12 @@ msgstr ""
 "Aucun nom de fichier libre ne restait pour lui dans le dossier de la "
 "bibliothèque."
 
-#: crates/ui_gtk/src/statistics.rs:318
+#: crates/ui_gtk/src/statistics.rs:320
 #, rust-format
 msgid "No genres tagged yet."
 msgstr "Aucun genre renseigné pour l’instant."
 
-#: crates/ui_gtk/src/queue_view.rs:440
+#: crates/ui_gtk/src/queue_view.rs:443
 #, rust-format
 msgid "No manually queued track"
 msgstr "Aucun morceau ajouté manuellement à la file"
@@ -1740,22 +1745,22 @@ msgstr ""
 msgid "No playlists."
 msgstr "Aucune liste de lecture."
 
-#: crates/ui_gtk/src/statistics.rs:385
+#: crates/ui_gtk/src/statistics.rs:387
 #, rust-format
 msgid "No plays recorded yet."
 msgstr "Aucune lecture enregistrée pour l’instant."
 
-#: crates/ui_gtk/src/statistics.rs:409
+#: crates/ui_gtk/src/statistics.rs:411
 #, rust-format
 msgid "No ratings recorded yet."
 msgstr "Aucune note enregistrée pour l’instant."
 
-#: crates/ui_gtk/src/statistics.rs:432
+#: crates/ui_gtk/src/statistics.rs:434
 #, rust-format
 msgid "No release years tagged yet."
 msgstr "Aucune année de sortie renseignée pour l’instant."
 
-#: crates/ui_gtk/src/statistics.rs:106
+#: crates/ui_gtk/src/statistics.rs:108
 #, rust-format
 msgid ""
 "No statistics yet — add music to your library to see its breakdown here."
@@ -1763,7 +1768,7 @@ msgstr ""
 "Pas encore de statistiques : ajoutez de la musique à votre bibliothèque pour "
 "voir sa répartition ici."
 
-#: crates/ui_gtk/src/statistics.rs:354
+#: crates/ui_gtk/src/statistics.rs:356
 #, rust-format
 msgid "No tracks carry a bitrate yet."
 msgstr "Aucun morceau n’a encore de débit renseigné."
@@ -1773,12 +1778,12 @@ msgstr "Aucun morceau n’a encore de débit renseigné."
 msgid "Not enough space — {needed} needed, {free} free"
 msgstr "Espace insuffisant : {needed} nécessaires, {free} disponibles"
 
-#: crates/ui_gtk/src/statistics.rs:452
+#: crates/ui_gtk/src/statistics.rs:454
 #, rust-format
 msgid "Nothing added yet."
 msgstr "Rien n’a encore été ajouté."
 
-#: crates/ui_gtk/src/queue_view.rs:97 crates/ui_gtk/src/queue_view.rs:444
+#: crates/ui_gtk/src/queue_view.rs:98 crates/ui_gtk/src/queue_view.rs:447
 #, rust-format
 msgid "Nothing up next"
 msgstr "Rien à suivre"
@@ -1788,14 +1793,14 @@ msgstr "Rien à suivre"
 msgid "Now Playing"
 msgstr "En cours de lecture"
 
-#: crates/ui_gtk/src/statistics.rs:449
+#: crates/ui_gtk/src/statistics.rs:451
 #, rust-format
 msgid "Number of tracks added to the library each year, split by genre."
 msgstr ""
 "Nombre de morceaux ajoutés à la bibliothèque chaque année, répartis par "
 "genre."
 
-#: crates/ui_gtk/src/statistics.rs:429
+#: crates/ui_gtk/src/statistics.rs:431
 #, rust-format
 msgid "Number of tracks per release decade, split by genre."
 msgstr "Nombre de morceaux par décennie de sortie, répartis par genre."
@@ -1826,7 +1831,7 @@ msgstr ""
 "Un ou plusieurs des fichiers sélectionnés sont absents du disque. Restaurez-"
 "les ou supprimez-les, puis relancez la fusion."
 
-#: crates/ui_gtk/src/preferences/mod.rs:355
+#: crates/ui_gtk/src/preferences/mod.rs:356
 #, rust-format
 msgid "Online"
 msgstr "En ligne"
@@ -1906,7 +1911,7 @@ msgstr ""
 msgid "Organizing library..."
 msgstr "Organisation de la bibliothèque..."
 
-#: crates/ui_gtk/src/statistics.rs:274
+#: crates/ui_gtk/src/statistics.rs:276
 #, rust-format
 msgid "Other ({count} genre)"
 msgid_plural "Other ({count} genres)"
@@ -1971,7 +1976,7 @@ msgctxt "playback control"
 msgid "Play"
 msgstr "Lire"
 
-#: crates/ui_gtk/src/shortcuts.rs:119
+#: crates/ui_gtk/src/shortcuts.rs:120
 #, rust-format
 msgid "Play / pause"
 msgstr "Lecture / pause"
@@ -1987,7 +1992,7 @@ msgstr "Nombre de lectures"
 msgid "Play Next"
 msgstr "Lire ensuite"
 
-#: crates/ui_gtk/src/albums.rs:1284
+#: crates/ui_gtk/src/albums.rs:1290
 #, rust-format
 msgid "Play album"
 msgstr "Lire l’album"
@@ -2003,7 +2008,7 @@ msgstr "Nombre de lectures"
 msgid "Play/Pause"
 msgstr "Lecture/Pause"
 
-#: crates/ui_gtk/src/shortcuts.rs:455
+#: crates/ui_gtk/src/shortcuts.rs:465
 #, rust-format
 msgctxt "shortcuts group"
 msgid "Playback"
@@ -2029,7 +2034,7 @@ msgstr "La lecture n’est pas disponible."
 msgid "Playlist"
 msgstr "Liste de lecture"
 
-#: crates/ui_gtk/src/sidebar.rs:236
+#: crates/ui_gtk/src/sidebar.rs:237
 #, rust-format
 msgid "Playlists"
 msgstr "Listes de lecture"
@@ -2061,12 +2066,12 @@ msgstr ""
 msgid "Plays"
 msgstr "Lectures"
 
-#: crates/ui_gtk/src/preferences/mod.rs:236 crates/ui_gtk/src/shortcuts.rs:139
+#: crates/ui_gtk/src/preferences/mod.rs:237 crates/ui_gtk/src/shortcuts.rs:141
 #, rust-format
 msgid "Preferences"
 msgstr "Préférences"
 
-#: crates/ui_gtk/src/preferences/mod.rs:203
+#: crates/ui_gtk/src/preferences/mod.rs:204
 #, rust-format
 msgid "Preferences (Ctrl+,)"
 msgstr "Préférences (Ctrl+,)"
@@ -2090,7 +2095,7 @@ msgstr ""
 msgid "Previous"
 msgstr "Précédent"
 
-#: crates/ui_gtk/src/shortcuts.rs:121
+#: crates/ui_gtk/src/shortcuts.rs:122
 #, rust-format
 msgid "Previous track"
 msgstr "Morceau précédent"
@@ -2100,7 +2105,7 @@ msgstr "Morceau précédent"
 msgid "Previous track (Ctrl+[)"
 msgstr "Morceau précédent (Ctrl+[)"
 
-#: crates/ui_gtk/src/statistics.rs:351
+#: crates/ui_gtk/src/statistics.rs:353
 #, rust-format
 msgid "Quality"
 msgstr "Qualité"
@@ -2162,7 +2167,7 @@ msgid_plural "Queued {count} tracks for tag enrichment."
 msgstr[0] "{count} morceau mis en file pour l’enrichissement des tags."
 msgstr[1] "{count} morceaux mis en file pour l’enrichissement des tags."
 
-#: crates/ui_gtk/src/shortcuts.rs:133
+#: crates/ui_gtk/src/shortcuts.rs:134
 #, rust-format
 msgid "Quit Sustain"
 msgstr "Quitter Sustain"
@@ -2198,7 +2203,7 @@ msgstr ""
 "Un remplacement audio YouTube interrompu a été récupéré, mais le chemin "
 "précédent a été conservé car son identité n’a pas pu être prouvée."
 
-#: crates/ui_gtk/src/statistics.rs:427
+#: crates/ui_gtk/src/statistics.rs:429
 #, rust-format
 msgid "Release years"
 msgstr "Années de sortie"
@@ -2235,7 +2240,7 @@ msgstr "Supprimer de la bibliothèque"
 msgid "Remove from Playlist"
 msgstr "Supprimer de la liste de lecture"
 
-#: crates/ui_gtk/src/queue_view.rs:527
+#: crates/ui_gtk/src/queue_view.rs:530
 #, rust-format
 msgid "Remove from queue"
 msgstr "Retirer de la file d’attente"
@@ -2296,7 +2301,7 @@ msgstr "Récupérer…"
 msgid "Retrieving online data ({completed}/{total})..."
 msgstr "Récupération des données en ligne ({completed}/{total})..."
 
-#: crates/ui_gtk/src/shortcuts.rs:117
+#: crates/ui_gtk/src/shortcuts.rs:118
 #, rust-format
 msgid "Reveal selected track in Files"
 msgstr "Afficher le morceau sélectionné dans Fichiers"
@@ -2389,7 +2394,7 @@ msgstr "Analyse de la bibliothèque..."
 msgid "Search"
 msgstr "Rechercher"
 
-#: crates/ui_gtk/src/shortcuts.rs:130
+#: crates/ui_gtk/src/shortcuts.rs:131
 #, rust-format
 msgid "Select all tracks"
 msgstr "Sélectionner tous les morceaux"
@@ -2421,17 +2426,17 @@ msgstr ""
 "très rapide ; resserrez-la si les résultats tombent souvent à la moitié ou "
 "au double du tempo attendu."
 
-#: crates/ui_gtk/src/preferences/mod.rs:192
+#: crates/ui_gtk/src/preferences/mod.rs:193
 #, rust-format
 msgid "Settings"
 msgstr "Réglages"
 
-#: crates/ui_gtk/src/statistics.rs:352
+#: crates/ui_gtk/src/statistics.rs:354
 #, rust-format
 msgid "Share of tracks per bitrate range."
 msgstr "Part des morceaux par plage de débit."
 
-#: crates/ui_gtk/src/statistics.rs:315
+#: crates/ui_gtk/src/statistics.rs:317
 #, rust-format
 msgid "Share of tracks per genre across the whole library."
 msgstr "Part des morceaux par genre dans toute la bibliothèque."
@@ -2478,13 +2483,13 @@ msgctxt "playback control"
 msgid "Shuffle"
 msgstr "Lecture aléatoire"
 
-#: crates/ui_gtk/src/preferences/mod.rs:358
+#: crates/ui_gtk/src/preferences/mod.rs:359
 #, rust-format
 msgctxt "preferences tab"
 msgid "Shuffle"
 msgstr "Aléatoire"
 
-#: crates/ui_gtk/src/albums.rs:1297
+#: crates/ui_gtk/src/albums.rs:1303
 #, rust-format
 msgid "Shuffle album"
 msgstr "Lecture aléatoire de l’album"
@@ -2538,7 +2543,7 @@ msgstr ""
 "morceau en cours pour choisir le suivant. Activer l’analyse audio permet des "
 "choix encore meilleurs."
 
-#: crates/ui_gtk/src/queue_view.rs:441
+#: crates/ui_gtk/src/queue_view.rs:444
 #, rust-format
 msgid "Smart Shuffle will choose the next track."
 msgstr "La lecture aléatoire intelligente choisira le morceau suivant."
@@ -2613,7 +2618,7 @@ msgstr ""
 msgid "Sort using sort-order tags"
 msgstr "Trier selon les tags d’ordre de tri"
 
-#: crates/ui_gtk/src/sidebar.rs:197
+#: crates/ui_gtk/src/sidebar.rs:198
 #, rust-format
 msgid "Statistics"
 msgstr "Statistiques"
@@ -2628,7 +2633,7 @@ msgstr "Stéréo"
 msgid "Strict matching"
 msgstr "Correspondance stricte"
 
-#: crates/ui_gtk/src/main_window.rs:227
+#: crates/ui_gtk/src/main_window.rs:228
 #: data/io.github.open_sustain.sustain.desktop:3
 #: data/io.github.open_sustain.sustain.metainfo.xml:8
 #, rust-format
@@ -2665,7 +2670,7 @@ msgstr ""
 "Sustain a conservé des fichiers de récupération car le nettoyage n’a pas pu "
 "se terminer en toute sécurité."
 
-#: crates/ui_gtk/src/shortcuts.rs:452
+#: crates/ui_gtk/src/shortcuts.rs:462
 #, rust-format
 msgid "Sustain shortcuts"
 msgstr "Raccourcis de Sustain"
@@ -2715,7 +2720,7 @@ msgstr "Synchronisation partielle : {changes} ; {unplayable}."
 msgid "Sync stopped: {changes}."
 msgstr "Synchronisation arrêtée : {changes}."
 
-#: crates/ui_gtk/src/sidebar.rs:570
+#: crates/ui_gtk/src/sidebar.rs:572
 #, rust-format
 msgid "Syncing"
 msgstr "Synchronisation"
@@ -3161,7 +3166,7 @@ msgstr ""
 msgid "This combination of field and operator is not supported."
 msgstr "Cette combinaison de champ et d’opérateur n’est pas prise en charge."
 
-#: crates/ui_gtk/src/main_window.rs:1491
+#: crates/ui_gtk/src/main_window.rs:1501
 #, rust-format
 msgid "This device cannot be ejected by the desktop."
 msgstr "Cet appareil ne peut pas être éjecté par le bureau."
@@ -3194,12 +3199,12 @@ msgstr "Ce morceau n’a pas d’illustration intégrée."
 msgid "This usually takes a moment."
 msgstr "Cela prend généralement un instant."
 
-#: crates/ui_gtk/src/cd_import_panel.rs:444
+#: crates/ui_gtk/src/cd_import_panel.rs:445
 #, rust-format
 msgid "Time"
 msgstr "Durée"
 
-#: crates/ui_gtk/src/cd_import_panel.rs:426
+#: crates/ui_gtk/src/cd_import_panel.rs:427
 #: crates/ui_gtk/src/duplicate_consolidation.rs:797
 #: crates/ui_gtk/src/track_info/details.rs:73
 #: crates/ui_gtk/src/track_info/multi.rs:296
@@ -3213,12 +3218,12 @@ msgctxt "smart playlist field"
 msgid "Title"
 msgstr "Titre"
 
-#: crates/ui_gtk/src/statistics.rs:383
+#: crates/ui_gtk/src/statistics.rs:385
 #, rust-format
 msgid "Top 5 by total play count."
 msgstr "Top 5 par nombre total de lectures."
 
-#: crates/ui_gtk/src/statistics.rs:406
+#: crates/ui_gtk/src/statistics.rs:408
 #, rust-format
 msgid "Top 5 by total rating points across rated tracks."
 msgstr "Top 5 par total des étoiles sur les morceaux notés."
@@ -3280,7 +3285,7 @@ msgid "Track total"
 msgstr "Nombre de morceaux"
 
 #: crates/app_runtime/src/cd_import/plan.rs:44
-#: crates/ui_gtk/src/cd_import_panel.rs:1521
+#: crates/ui_gtk/src/cd_import_panel.rs:1523
 #: crates/ui_gtk/src/duplicate_consolidation.rs:448
 #, rust-format
 msgid "Track {number}"
@@ -3300,8 +3305,8 @@ msgctxt "file type column"
 msgid "Type"
 msgstr "Type"
 
-#: crates/ui_gtk/src/device_panel.rs:897 crates/ui_gtk/src/statistics.rs:252
-#: crates/ui_gtk/src/statistics.rs:421 crates/ui_gtk/src/statistics.rs:441
+#: crates/ui_gtk/src/device_panel.rs:897 crates/ui_gtk/src/statistics.rs:254
+#: crates/ui_gtk/src/statistics.rs:423 crates/ui_gtk/src/statistics.rs:443
 #, rust-format
 msgid "Unknown"
 msgstr "Inconnu"
@@ -3313,7 +3318,7 @@ msgstr "Album inconnu"
 
 #: crates/app_runtime/src/cd_import/plan.rs:53
 #: crates/ui_gtk/src/albums/model.rs:374
-#: crates/ui_gtk/src/cd_import_panel.rs:61 crates/ui_gtk/src/util.rs:43
+#: crates/ui_gtk/src/cd_import_panel.rs:62 crates/ui_gtk/src/util.rs:43
 #, rust-format
 msgid "Unknown Artist"
 msgstr "Artiste inconnu"
@@ -3354,7 +3359,7 @@ msgstr "Artistes divers"
 msgid "Version {version}"
 msgstr "Version {version}"
 
-#: crates/ui_gtk/src/preferences/mod.rs:360
+#: crates/ui_gtk/src/preferences/mod.rs:361
 #, rust-format
 msgid "Views"
 msgstr "Vues"
@@ -3401,7 +3406,7 @@ msgctxt "smart playlist field"
 msgid "Year"
 msgstr "Année"
 
-#: crates/ui_gtk/src/statistics.rs:447
+#: crates/ui_gtk/src/statistics.rs:449
 #, rust-format
 msgid "Year added"
 msgstr "Année d’ajout"
@@ -3715,7 +3720,7 @@ msgctxt "number of total"
 msgid "of"
 msgstr "sur"
 
-#: crates/ui_gtk/src/statistics.rs:568
+#: crates/ui_gtk/src/statistics.rs:570
 #, rust-format
 msgid "of music"
 msgstr "de musique"
@@ -3725,12 +3730,12 @@ msgstr "de musique"
 msgid "of the following rules:"
 msgstr "des règles suivantes :"
 
-#: crates/ui_gtk/src/statistics.rs:569
+#: crates/ui_gtk/src/statistics.rs:571
 #, rust-format
 msgid "on disk"
 msgstr "sur le disque"
 
-#: crates/ui_gtk/src/statistics.rs:572
+#: crates/ui_gtk/src/statistics.rs:574
 #, rust-format
 msgid "play"
 msgid_plural "plays"
@@ -3772,8 +3777,8 @@ msgctxt "smart playlist limit"
 msgid "title"
 msgstr "par titre"
 
-#: crates/ui_gtk/src/statistics.rs:308 crates/ui_gtk/src/statistics.rs:346
-#: crates/ui_gtk/src/statistics.rs:566
+#: crates/ui_gtk/src/statistics.rs:310 crates/ui_gtk/src/statistics.rs:348
+#: crates/ui_gtk/src/statistics.rs:568
 #, rust-format
 msgid "track"
 msgid_plural "tracks"
@@ -3881,7 +3886,7 @@ msgid_plural "{count} copied"
 msgstr[0] "{count} copié"
 msgstr[1] "{count} copiés"
 
-#: crates/ui_gtk/src/status_bar.rs:475
+#: crates/ui_gtk/src/status_bar.rs:474
 #, rust-format
 msgid "{count} day"
 msgid_plural "{count} days"
@@ -3973,14 +3978,14 @@ msgstr[1] ""
 "{count} fichiers n’ont pas pu être importés. Le reste de l’importation s’est "
 "poursuivi."
 
-#: crates/ui_gtk/src/status_bar.rs:480
+#: crates/ui_gtk/src/status_bar.rs:479
 #, rust-format
 msgid "{count} hour"
 msgid_plural "{count} hours"
 msgstr[0] "{count} heure"
 msgstr[1] "{count} heures"
 
-#: crates/ui_gtk/src/status_bar.rs:487
+#: crates/ui_gtk/src/status_bar.rs:486
 #, rust-format
 msgid "{count} minute"
 msgid_plural "{count} minutes"
@@ -4073,7 +4078,7 @@ msgid_plural "{count} removed"
 msgstr[0] "{count} supprimé"
 msgstr[1] "{count} supprimés"
 
-#: crates/ui_gtk/src/status_bar.rs:462
+#: crates/ui_gtk/src/status_bar.rs:461
 #, rust-format
 msgctxt "count of songs"
 msgid "{count} song"
@@ -4190,7 +4195,7 @@ msgstr "Fichier audio {format}"
 #. Translators: one line of a histogram column's tooltip, a
 #. genre and its track count and share, as in
 #. "House: 120 (40%)".
-#: crates/ui_gtk/src/statistics.rs:520
+#: crates/ui_gtk/src/statistics.rs:522
 #, rust-format
 msgctxt "statistics genre split"
 msgid "{genre}: {share}"
@@ -4203,13 +4208,13 @@ msgid "{label} must be a whole number."
 msgstr "{label} doit être un nombre entier."
 
 #. Translators: a size in gigabytes; use your language's unit symbol.
-#: crates/ui_gtk/src/status_bar.rs:502
+#: crates/ui_gtk/src/status_bar.rs:501
 #, rust-format
 msgid "{size} GB"
 msgstr "{size} Go"
 
 #. Translators: a size in megabytes; use your language's unit symbol.
-#: crates/ui_gtk/src/status_bar.rs:505
+#: crates/ui_gtk/src/status_bar.rs:504
 #, rust-format
 msgid "{size} MB"
 msgstr "{size} Mo"
@@ -4221,7 +4226,7 @@ msgid "{used} of {total}"
 msgstr "{used} sur {total}"
 
 #. Translators: a decade, as in "1990s".
-#: crates/ui_gtk/src/statistics.rs:419
+#: crates/ui_gtk/src/statistics.rs:421
 #, rust-format
 msgid "{year}s"
 msgstr "années {year}"

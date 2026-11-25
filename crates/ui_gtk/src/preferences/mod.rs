@@ -11,10 +11,11 @@ use sustain_i18n::{gettext, pgettext};
 use super::{
     PREFERENCES_WIDTH, WINDOW_SHADOW_MARGIN, command_controller::SharedCommandController,
     library_consolidation::LibraryConsolidationRequestedCallback,
-    library_scan::LibraryScanRequestedCallback, shortcuts::PREFERENCES_ACCELERATOR,
+    library_scan::LibraryScanRequestedCallback, shortcuts::register_preferences_accelerator,
 };
 
 mod about_tab;
+pub(crate) use about_tab::open_documentation;
 mod analysis_tab;
 mod encoding_tab;
 mod library_tab;
@@ -133,8 +134,8 @@ pub(crate) fn install_preferences_action(
 
     // The action carries the tab to land on as a string target, so any
     // widget can open Preferences at a specific page (e.g. the CD page's
-    // "Encoding Settings" button → the Encoding tab). The Ctrl+, accelerator
-    // targets the Library tab via the detailed action name.
+    // "Encoding Settings" button → the Encoding tab). Ctrl+, lands on the
+    // Library tab.
     let preferences = gio::SimpleAction::new("preferences", Some(glib::VariantTy::STRING));
     let window = window.clone();
     let command_controller = command_controller.clone();
@@ -152,10 +153,7 @@ pub(crate) fn install_preferences_action(
         );
     });
     app.add_action(&preferences);
-    app.set_accels_for_action(
-        &format!("app.preferences::{TAB_LIBRARY}"),
-        &[PREFERENCES_ACCELERATOR],
-    );
+    register_preferences_accelerator(app);
 }
 
 /// Every valid Preferences tab id, so an action target naming an unknown tab
