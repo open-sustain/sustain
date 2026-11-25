@@ -16,6 +16,13 @@
 //! before exchange leaves the original pathname untouched. A directory-sync
 //! failure after exchange is reported as a failure because crash durability is
 //! uncertain; rolling back would add a second unsafe namespace mutation.
+//!
+//! A filesystem that cannot exchange two names (exFAT, NTFS, network shares)
+//! has the staged copy renamed over the source instead. Nothing then holds
+//! the displaced file to swap back, so a change another program makes to the
+//! source between the last check and the rename is lost with it. A courtesy
+//! mirror of what SQLite holds is worth that instant; never mirroring to
+//! such a library is not.
 
 use std::{
     ffi::{CStr, CString, OsStr, OsString},
@@ -30,7 +37,7 @@ use rustix::{
     fs::{
         AtFlags, CWD, FileType, Mode, OFlags, RenameFlags, Stat, XattrFlags, fchmod, fchown,
         fgetxattr, fgetxattr_query, flistxattr, flistxattr_query, fremovexattr, fsetxattr, fstat,
-        fsync, openat, renameat_with, statat, unlinkat,
+        fsync, openat, renameat, renameat_with, statat, unlinkat,
     },
     io::Errno,
 };
@@ -80,21 +87,33 @@ pub(super) fn atomic_write_via_rename<F>(
 where
     F: FnOnce(&Path) -> MetadataResult<()>,
 {
-    atomic_write_via_rename_with(path, read, modify_temp, temporary_sibling_name, |parent| {
-        fsync(parent).map_err(io::Error::from)
-    })
+    atomic_write_via_rename_with(
+        path,
+        read,
+        modify_temp,
+        temporary_sibling_name,
+        exchange_names,
+        |parent| fsync(parent).map_err(io::Error::from),
+    )
 }
 
-fn atomic_write_via_rename_with<F, N, S>(
+/// Swap the files the names `first` and `second` in `parent` refer to.
+fn exchange_names(parent: &OwnedFd, first: &OsStr, second: &OsStr) -> Result<(), Errno> {
+    renameat_with(parent, first, parent, second, RenameFlags::EXCHANGE)
+}
+
+fn atomic_write_via_rename_with<F, N, X, S>(
     path: &Path,
     read: SourceVersion,
     modify_temp: F,
     mut next_temporary_name: N,
+    mut exchange: X,
     sync_parent: S,
 ) -> MetadataResult<()>
 where
     F: FnOnce(&Path) -> MetadataResult<()>,
     N: FnMut() -> OsString,
+    X: FnMut(&OwnedFd, &OsStr, &OsStr) -> Result<(), Errno>,
     S: FnOnce(&OwnedFd) -> io::Result<()>,
 {
     let file_name = path.file_name().ok_or(MetadataError::WriteFailed)?;
@@ -146,30 +165,28 @@ where
         return staged;
     }
 
-    if renameat_with(
-        &parent,
-        &temporary_name,
-        &parent,
-        file_name,
-        RenameFlags::EXCHANGE,
-    )
-    .is_err()
-    {
-        remove_temporary_if_owned(&parent, &temporary_name, &temporary);
-        return Err(MetadataError::WriteFailed);
+    match exchange(&parent, &temporary_name, file_name) {
+        Ok(()) => {}
+        // The filesystem cannot exchange names; see the module documentation.
+        Err(Errno::INVAL) => {
+            if renameat(&parent, &temporary_name, &parent, file_name).is_err() {
+                remove_temporary_if_owned(&parent, &temporary_name, &temporary);
+                return Err(MetadataError::WriteFailed);
+            }
+            if !pathname_refers_to_open_file(&parent, file_name, &temporary, &temporary_stat)? {
+                return Err(MetadataError::WriteFailed);
+            }
+            return sync_parent(&parent).map_err(|_| MetadataError::WriteFailed);
+        }
+        Err(_) => {
+            remove_temporary_if_owned(&parent, &temporary_name, &temporary);
+            return Err(MetadataError::WriteFailed);
+        }
     }
     if !pathname_refers_to_open_file(&parent, file_name, &temporary, &temporary_stat)?
         || !pathname_refers_to_open_file(&parent, &temporary_name, &source, &source_stat)?
     {
-        if renameat_with(
-            &parent,
-            &temporary_name,
-            &parent,
-            file_name,
-            RenameFlags::EXCHANGE,
-        )
-        .is_ok()
-        {
+        if exchange(&parent, &temporary_name, file_name).is_ok() {
             remove_temporary_if_owned(&parent, &temporary_name, &temporary);
         }
         return Err(MetadataError::WriteFailed);
@@ -504,7 +521,9 @@ mod tests {
         io::Errno,
     };
 
-    use super::{SourceVersion, atomic_write_via_rename, atomic_write_via_rename_with};
+    use super::{
+        SourceVersion, atomic_write_via_rename, atomic_write_via_rename_with, exchange_names,
+    };
     use crate::MetadataError;
 
     /// The version of the file at `path` as a caller reading it now sees.
@@ -535,6 +554,7 @@ mod tests {
                 fs::write(temporary, b"replacement").map_err(|_| MetadataError::WriteFailed)
             },
             || names.pop_front().expect("candidate name"),
+            exchange_names,
             |parent| fsync(parent).map_err(io::Error::from),
         )
         .expect("replace");
@@ -625,11 +645,90 @@ mod tests {
                 fs::write(temporary, b"replacement").map_err(|_| MetadataError::WriteFailed)
             },
             || OsString::from(".owned-temp"),
+            exchange_names,
             |_| Err(io::Error::other("injected directory fsync failure")),
         );
 
         assert_eq!(result, Err(MetadataError::WriteFailed));
         assert_eq!(fs::read(&path).expect("read audio"), b"replacement");
+        assert!(!root.join(".owned-temp").exists());
+
+        fs::remove_dir_all(root).expect("remove root");
+    }
+
+    /// What renaming a file over another on exFAT, NTFS or a network share
+    /// is: those filesystems cannot exchange two names.
+    fn exchange_unsupported(
+        _parent: &std::os::fd::OwnedFd,
+        _first: &std::ffi::OsStr,
+        _second: &std::ffi::OsStr,
+    ) -> Result<(), Errno> {
+        Err(Errno::INVAL)
+    }
+
+    #[test]
+    fn publishes_by_rename_where_names_cannot_be_exchanged() {
+        let root = unique_test_directory();
+        fs::create_dir_all(&root).expect("create root");
+        let path = root.join("audio.bin");
+        fs::write(&path, b"original").expect("seed audio");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).expect("set mode");
+
+        atomic_write_via_rename_with(
+            &path,
+            read_now(&path),
+            |temporary| {
+                fs::write(temporary, b"replacement").map_err(|_| MetadataError::WriteFailed)
+            },
+            || OsString::from(".owned-temp"),
+            exchange_unsupported,
+            |parent| fsync(parent).map_err(io::Error::from),
+        )
+        .expect("replace");
+
+        assert_eq!(fs::read(&path).expect("read audio"), b"replacement");
+        assert_eq!(
+            fs::metadata(&path)
+                .expect("stat audio")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o640
+        );
+        assert_eq!(
+            fs::read_dir(&root).expect("list root").count(),
+            1,
+            "only the audio file is left"
+        );
+
+        fs::remove_dir_all(root).expect("remove root");
+    }
+
+    #[test]
+    fn refuses_where_names_cannot_be_exchanged_a_file_changed_while_staging() {
+        let root = unique_test_directory();
+        fs::create_dir_all(&root).expect("create root");
+        let path = root.join("audio.bin");
+        fs::write(&path, b"original").expect("seed audio");
+        let read = read_now(&path);
+
+        let result = atomic_write_via_rename_with(
+            &path,
+            read,
+            |temporary| {
+                fs::write(&path, b"another program's edit").expect("edit the source");
+                fs::write(temporary, b"replacement").map_err(|_| MetadataError::WriteFailed)
+            },
+            || OsString::from(".owned-temp"),
+            exchange_unsupported,
+            |parent| fsync(parent).map_err(io::Error::from),
+        );
+
+        assert_eq!(result, Err(MetadataError::SourceChanged));
+        assert_eq!(
+            fs::read(&path).expect("read audio"),
+            b"another program's edit"
+        );
         assert!(!root.join(".owned-temp").exists());
 
         fs::remove_dir_all(root).expect("remove root");

@@ -43,7 +43,9 @@ the consolidate action.
 SQLite remains authoritative in both modes. Courtesy tag mirroring is
 published safely per audio file and retained for automatic retry when a
 particular target filesystem or permission policy refuses the replacement.
-Sustain never falls back to an in-place tag rewrite.
+On a filesystem that cannot exchange two names (exFAT, NTFS, network
+shares) the tagged copy is renamed over the file. Sustain never falls back
+to an in-place tag rewrite.
 
 ### Library folder picker — *iso-iTunes*
 Preferences exposes a folder chooser plus a manual "Scan Library" trigger.
