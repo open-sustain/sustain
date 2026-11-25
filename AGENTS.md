@@ -219,6 +219,15 @@ mode, a new playlist kind, a new system integration — also add a bullet to
 the Features list in `README.md`. Bug fixes, refactors, and pending/aspirational
 work do not belong in either file.
 
+The user documentation is published at
+<https://open-sustain.github.io/sustain/docs/>: `.github/workflows/pages.yml`
+builds it with mdBook (`docs/book.toml`) on every push to `docs/`, and F1, the
+About pane and the AppStream `help` URL all open it. Only the pages listed in
+`docs/SUMMARY.md` are published. A new user-facing guide gets an entry there;
+design and analysis notes stay off it. Published pages link to each other with
+relative `.md` links, which work both on GitHub and on the site; a link to a
+file outside `docs/` breaks on the site, so point it at GitHub instead.
+
 # Git
 
 Before committing, run the same gate CI runs: `cargo fmt --all -- --check && cargo clippy --workspace --all-targets --locked -- -D warnings && GDK_BACKEND=x11 GDK_DISABLE=gl GSK_RENDERER=cairo xvfb-run -a cargo test --workspace --locked --no-fail-fast && RUSTDOCFLAGS="-D warnings" cargo doc --workspace --locked --no-deps --document-private-items`.

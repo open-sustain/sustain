@@ -18,8 +18,8 @@ const APP_ICON_NAME: &str = "io.github.open_sustain.sustain";
 /// display scale factor, so it stays crisp on HiDPI screens.
 const APP_ICON_SIZE: i32 = 96;
 
-const DOCUMENTATION_URL: &str =
-    "https://github.com/open-sustain/sustain/blob/main/docs/features.md";
+/// The user documentation site, built from `docs/` (see `docs/book.toml`).
+const DOCUMENTATION_URL: &str = "https://open-sustain.github.io/sustain/docs/";
 const ISSUES_URL: &str = "https://github.com/open-sustain/sustain/issues";
 
 pub(super) fn build(database_path: &Path) -> gtk::Widget {
