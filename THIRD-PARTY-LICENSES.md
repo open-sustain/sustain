@@ -3335,7 +3335,7 @@ Applies to:
 - [fastrand 2.4.1](https://github.com/smol-rs/fastrand)
 - [find-msvc-tools 0.1.9](https://github.com/rust-lang/cc-rs)
 - [flate2 1.1.11](https://github.com/rust-lang/flate2-rs)
-- [form_urlencoded 1.2.2](https://github.com/servo/rust-url)
+- [form_urlencoded 1.2.3](https://github.com/servo/rust-url)
 - [futures-lite 2.6.1](https://github.com/smol-rs/futures-lite)
 - [glob 0.3.3](https://github.com/rust-lang/glob)
 - [gstreamer 0.24.5](https://gitlab.freedesktop.org/gstreamer/gstreamer-rs)
@@ -3377,7 +3377,7 @@ Applies to:
 - [system-deps 7.0.8](https://github.com/gdesmott/system-deps)
 - [tempfile 3.27.0](https://github.com/Stebalien/tempfile)
 - [unicode-normalization 0.1.26](https://github.com/unicode-rs/unicode-normalization)
-- [url 2.5.8](https://github.com/servo/rust-url)
+- [url 2.5.9](https://github.com/servo/rust-url)
 - [uuid 1.23.1](https://github.com/uuid-rs/uuid)
 
 ```text
