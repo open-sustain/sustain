@@ -1,10 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 AnnoyingTechnology
 
-use std::{path::PathBuf, time::Duration};
+use std::{
+    io::{Cursor, Read, Seek, SeekFrom},
+    path::PathBuf,
+    time::Duration,
+};
 
 use super::{
-    AudioExtent, FrameHeader, MAX_FRAME_LEN, audio_extent, first_audio_frame_offset, mpeg_frame_len,
+    AudioExtent, FrameHeader, MAX_FRAME_LEN, audio_extent, audio_extent_of,
+    first_audio_frame_offset, mpeg_frame_len,
 };
 
 /// One MPEG-1 Layer III, 128 kbps, 44.1 kHz frame is 417 bytes. The 4-byte
@@ -294,6 +299,108 @@ fn tags_and_damage_around_the_frames_are_not_counted() {
 
     let extent = extent_of("damaged", &bytes).expect("an audio extent");
     assert_eq!(extent.duration, playing_time(300));
+}
+
+/// A file that counts the bytes read out of it.
+struct CountingReader {
+    bytes: Cursor<Vec<u8>>,
+    read: usize,
+}
+
+impl Read for CountingReader {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        let count = self.bytes.read(buffer)?;
+        self.read += count;
+        Ok(count)
+    }
+}
+
+impl Seek for CountingReader {
+    fn seek(&mut self, position: SeekFrom) -> std::io::Result<u64> {
+        self.bytes.seek(position)
+    }
+}
+
+/// The extent `bytes` has, and how many of them reading it took.
+fn extent_and_bytes_read(bytes: Vec<u8>) -> (Option<AudioExtent>, usize) {
+    let mut file = CountingReader {
+        bytes: Cursor::new(bytes),
+        read: 0,
+    };
+    let extent = audio_extent_of(&mut file);
+    (extent, file.read)
+}
+
+/// A long stream of a constant 128 kbps, about 20 MB.
+fn long_constant_bitrate_stream() -> Vec<u8> {
+    mpeg_frames(50_000)
+}
+
+#[test]
+fn a_constant_bitrate_stream_is_sampled_not_read_through() {
+    // An MP3 that declares no frame count is common (#397): reading each
+    // one through made a first scan read most of a library's bytes.
+    let (extent, read) = extent_and_bytes_read(long_constant_bitrate_stream());
+
+    // lofty's estimate from the first frame's bitrate stands.
+    assert_eq!(extent, None);
+    assert!(read <= 4 * 64 * 1024 + 1024, "{read} bytes read");
+}
+
+#[test]
+fn a_declared_frame_count_costs_one_short_read() {
+    let mut bytes = xing_frame(50_001);
+    bytes.extend_from_slice(&long_constant_bitrate_stream());
+
+    let (extent, read) = extent_and_bytes_read(bytes);
+
+    assert_eq!(
+        extent,
+        Some(AudioExtent {
+            duration: playing_time(50_001),
+            measured_bitrate_kbps: None,
+        })
+    );
+    assert!(read <= 64 * 1024 + 1024, "{read} bytes read");
+}
+
+#[test]
+fn a_long_variable_bitrate_stream_is_counted() {
+    let (extent, read) = extent_and_bytes_read(variable_bitrate_frames(20_000));
+
+    assert_eq!(
+        extent.map(|extent| extent.duration),
+        Some(playing_time(20_000))
+    );
+    assert!(read > 0);
+}
+
+#[test]
+fn a_stream_constant_through_its_quiet_opening_but_varying_after_is_counted() {
+    // Longer than the first read: only the samples across the stream show
+    // its bitrate varies.
+    let mut bytes: Vec<u8> = (0..1_000).flat_map(|_| mpeg_frame_at(1)).collect();
+    assert!(bytes.len() > 64 * 1024);
+    bytes.extend_from_slice(&variable_bitrate_frames(20_000));
+
+    let (extent, _) = extent_and_bytes_read(bytes);
+
+    assert_eq!(
+        extent.map(|extent| extent.duration),
+        Some(playing_time(21_000))
+    );
+}
+
+#[test]
+fn a_constant_bitrate_stream_with_damage_at_a_sample_point_is_counted() {
+    // A sample that does not read as clean frames proves nothing.
+    let mut bytes = long_constant_bitrate_stream();
+    let middle = bytes.len() / 2;
+    bytes[middle..middle + 8 * 1024].fill(0x7E);
+
+    let (extent, _) = extent_and_bytes_read(bytes);
+
+    assert!(extent.is_some());
 }
 
 #[test]

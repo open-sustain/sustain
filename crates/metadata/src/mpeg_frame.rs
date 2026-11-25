@@ -32,7 +32,11 @@
 //! constant bitrate and arbitrarily wrong for a variable one (a 5-minute
 //! track that opens on a 32 kbps frame reads as 37 minutes).
 //! [`audio_extent`] takes the declared count when there is one and counts
-//! the frames otherwise.
+//! the frames otherwise — unless a few short samples across the stream show
+//! its bitrate is constant. lofty's estimate then stands, and the file is
+//! not read through: it is right but for an encoder that never pads its
+//! frames, which runs a fraction of a percent short of the bitrate it
+//! declares, and counting would read the whole file for that.
 
 use std::{
     fs::File,
@@ -86,9 +90,19 @@ const INITIAL_AUDIO_WINDOW_BYTES: usize = 64 * 1024;
 /// frame at 160 kbps and 8 kHz (MPEG-2.5), 144 × 160,000 / 8,000 + 1 bytes.
 const MAX_FRAME_LEN: usize = 2881;
 
+/// Below this much audio, counting its frames reads little more than
+/// sampling them would.
+const SAMPLED_AUDIO_MIN_BYTES: u64 = 4 * INITIAL_AUDIO_WINDOW_BYTES as u64;
+
+/// Where [`audio_extent`] samples the bitrate of a stream that declares no
+/// frame count, as fractions of its audio: away from the quiet opening and
+/// close a variable bitrate runs low through. Each sample is
+/// [`INITIAL_AUDIO_WINDOW_BYTES`] long.
+const BITRATE_SAMPLE_POINTS: [(u64, u64); 3] = [(1, 4), (1, 2), (3, 4)];
+
 /// Reads from `file` until `buffer` holds `len` bytes; returns whether the
 /// file ended first.
-fn read_up_to(file: &mut File, buffer: &mut Vec<u8>, len: usize) -> Option<bool> {
+fn read_up_to(file: &mut impl Read, buffer: &mut Vec<u8>, len: usize) -> Option<bool> {
     let missing = len.saturating_sub(buffer.len());
     file.by_ref()
         .take(missing as u64)
@@ -107,14 +121,21 @@ pub(crate) struct AudioExtent {
     pub(crate) measured_bitrate_kbps: Option<u32>,
 }
 
-/// The extent of the MPEG audio in the file at `path`, or `None` when the
-/// file cannot be read or no audio frame is found near its start.
+/// The extent of the MPEG audio in the file at `path`, or `None` when
+/// lofty's estimate from the first frame's bitrate stands: the stream's
+/// bitrate is constant, the file cannot be read, or no audio frame is found
+/// near its start.
 ///
-/// A file that declares its frame count costs two short reads; one that
-/// does not is read through once.
+/// A file that declares its frame count costs two short reads, and one
+/// with a constant bitrate three more; only one whose bitrate varies is
+/// read through.
 pub(crate) fn audio_extent(path: &Path) -> Option<AudioExtent> {
-    let mut file = File::open(path).ok()?;
-    let tags_len = leading_id3v2_tags_len(&mut file)?;
+    audio_extent_of(&mut File::open(path).ok()?)
+}
+
+fn audio_extent_of(file: &mut (impl Read + Seek)) -> Option<AudioExtent> {
+    let tags_len = leading_id3v2_tags_len(file)?;
+    let audio_len = file.seek(SeekFrom::End(0)).ok()?.saturating_sub(tags_len);
     file.seek(SeekFrom::Start(tags_len)).ok()?;
     let mut audio = Vec::new();
     // Real audio starts right after its tags, so a short window almost
@@ -122,13 +143,13 @@ pub(crate) fn audio_extent(path: &Path) -> Option<AudioExtent> {
     // offset found in the window is only trusted when the chains of it and
     // of every earlier candidate fit inside, so that it is the offset the
     // whole leading region would yield.
-    let window_is_whole_file = read_up_to(&mut file, &mut audio, INITIAL_AUDIO_WINDOW_BYTES)?;
+    let window_is_whole_file = read_up_to(file, &mut audio, INITIAL_AUDIO_WINDOW_BYTES)?;
     let first_frame_offset = match first_audio_frame_offset(&audio).filter(|&offset| {
         window_is_whole_file || offset + REQUIRED_CHAINED_FRAMES * MAX_FRAME_LEN <= audio.len()
     }) {
         Some(offset) => offset,
         None => {
-            read_up_to(&mut file, &mut audio, MAX_LEADING_REGION_BYTES)?;
+            read_up_to(file, &mut audio, MAX_LEADING_REGION_BYTES)?;
             first_audio_frame_offset(&audio)?
         }
     };
@@ -140,6 +161,20 @@ pub(crate) fn audio_extent(path: &Path) -> Option<AudioExtent> {
         });
     }
 
+    if audio_len >= SAMPLED_AUDIO_MIN_BYTES
+        && bitrate_is_constant(
+            file,
+            tags_len,
+            audio_len,
+            &audio[first_frame_offset..],
+            &first_frame,
+        )?
+    {
+        return None;
+    }
+
+    file.seek(SeekFrom::Start(tags_len + audio.len() as u64))
+        .ok()?;
     file.read_to_end(&mut audio).ok()?;
     let counted = count_frames(&audio[first_frame_offset..], &first_frame);
     let duration = first_frame.duration_of(counted.frames);
@@ -152,7 +187,7 @@ pub(crate) fn audio_extent(path: &Path) -> Option<AudioExtent> {
 /// Total on-disk length of the consecutive ID3v2 tags at the start of
 /// `file`, read from their headers alone: a tag holding artwork runs to
 /// megabytes. `None` when the file cannot be read.
-fn leading_id3v2_tags_len(file: &mut File) -> Option<u64> {
+fn leading_id3v2_tags_len(file: &mut (impl Read + Seek)) -> Option<u64> {
     let mut offset = 0;
     loop {
         file.seek(SeekFrom::Start(offset)).ok()?;
@@ -200,6 +235,63 @@ fn declared_frame_count(first_frame: &[u8], header: &FrameHeader) -> Option<u64>
         big_endian_u32(vbri.get(VBRI_FRAME_COUNT_OFFSET..)?)?
     };
     (count > 0).then_some(u64::from(count))
+}
+
+/// Whether the stream `first_frame` starts keeps that frame's bitrate
+/// through `opening`, the audio read from its first frame on, and through a
+/// sample at each of [`BITRATE_SAMPLE_POINTS`] of the `audio_len` bytes of
+/// audio from `audio_start` in `file`. A sample holding anything but such
+/// frames, or none at all, does not show a constant bitrate.
+fn bitrate_is_constant(
+    file: &mut (impl Read + Seek),
+    audio_start: u64,
+    audio_len: u64,
+    opening: &[u8],
+    first_frame: &FrameHeader,
+) -> Option<bool> {
+    if !frames_keep_bitrate(opening, first_frame) {
+        return Some(false);
+    }
+    let mut sample = Vec::with_capacity(INITIAL_AUDIO_WINDOW_BYTES);
+    for (numerator, denominator) in BITRATE_SAMPLE_POINTS {
+        file.seek(SeekFrom::Start(
+            audio_start + audio_len * numerator / denominator,
+        ))
+        .ok()?;
+        sample.clear();
+        read_up_to(file, &mut sample, INITIAL_AUDIO_WINDOW_BYTES)?;
+        // A sample starts anywhere in a frame; the next frame starts within
+        // the longest frame's length.
+        let first_whole_frame = (0..MAX_FRAME_LEN.min(sample.len())).find(|&offset| {
+            FrameHeader::parse(&sample[offset..])
+                .is_some_and(|frame| frame.is_of_the_same_stream_as(first_frame))
+                && frames_chain_from(&sample, offset)
+        });
+        match first_whole_frame {
+            Some(offset) if frames_keep_bitrate(&sample[offset..], first_frame) => {}
+            _ => return Some(false),
+        }
+    }
+    Some(true)
+}
+
+/// Whether `frames`, walked from frame to frame up to its end, are all
+/// frames of `first_frame`'s stream at its bitrate. The last frame may run
+/// past the end.
+fn frames_keep_bitrate(frames: &[u8], first_frame: &FrameHeader) -> bool {
+    let mut offset = 0;
+    while offset + FRAME_HEADER_LEN <= frames.len() {
+        match FrameHeader::parse(&frames[offset..]) {
+            Some(frame)
+                if frame.is_of_the_same_stream_as(first_frame)
+                    && frame.bitrate == first_frame.bitrate =>
+            {
+                offset += frame.len;
+            }
+            _ => return false,
+        }
+    }
+    true
 }
 
 fn big_endian_u32(bytes: &[u8]) -> Option<u32> {
@@ -337,11 +429,15 @@ fn mpeg_frame_len(bytes: &[u8]) -> Option<usize> {
     FrameHeader::parse(bytes).map(|header| header.len)
 }
 
+const FRAME_HEADER_LEN: usize = 4;
+
 /// What an MPEG audio frame header says about its frame.
 #[derive(Clone, Copy)]
 struct FrameHeader {
     version: Mpeg,
     layer: Layer,
+    /// In bits per second.
+    bitrate: usize,
     sample_rate: usize,
     single_channel: bool,
     /// The frame's total length in bytes, header included.
@@ -353,7 +449,7 @@ impl FrameHeader {
     /// not a valid MPEG-1/2/2.5 Layer I/II/III header with a usable bitrate
     /// and sample rate.
     fn parse(bytes: &[u8]) -> Option<Self> {
-        if bytes.len() < 4 {
+        if bytes.len() < FRAME_HEADER_LEN {
             return None;
         }
         // 11-bit frame sync.
@@ -387,9 +483,10 @@ impl FrameHeader {
             _ => samples_per_frame(version, layer) / 8 * bitrate / sample_rate + padding,
         };
 
-        (len >= 4).then_some(Self {
+        (len >= FRAME_HEADER_LEN).then_some(Self {
             version,
             layer,
+            bitrate,
             sample_rate,
             single_channel,
             len,
@@ -397,7 +494,7 @@ impl FrameHeader {
     }
 
     /// Whether `other` can be a frame of the stream this one belongs to:
-    /// bitrate, padding and channel mode vary from frame to frame, these
+    /// bitrate, padding and channel mode may vary from frame to frame, these
     /// do not.
     fn is_of_the_same_stream_as(&self, other: &Self) -> bool {
         self.version == other.version

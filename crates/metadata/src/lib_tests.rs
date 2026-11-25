@@ -5,6 +5,7 @@ use std::{
     collections::BTreeMap,
     fs, io,
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 use lofty::{
@@ -784,6 +785,39 @@ fn dump_id3v2(tag: Tag) -> Vec<u8> {
         .dump_to(&mut bytes, WriteOptions::default())
         .expect("ID3v2 tag serializes");
     bytes
+}
+
+#[test]
+fn a_constant_bitrate_mp3_without_a_frame_count_reads_its_exact_length() {
+    // 128 kbps at 44.1 kHz is 417.96 bytes a frame: an encoder pads one
+    // frame in about 25 to keep the rate exact.
+    const FRAMES: u64 = 50_000;
+    let stream_len = |frames: u64| frames * 144 * 128_000 / 44_100;
+    let mut bytes = Vec::new();
+    for index in 0..FRAMES {
+        let frame_len = (stream_len(index + 1) - stream_len(index)) as usize;
+        let padding = if frame_len == 418 { 0x02 } else { 0x00 };
+        let mut frame = vec![0xFF, 0xFB, 0x90 | padding, 0x00];
+        frame.resize(frame_len, 0x00);
+        bytes.extend_from_slice(&frame);
+    }
+    let root = unique_test_directory();
+    fs::create_dir_all(&root).expect("create test directory");
+    let path = root.join("constant bitrate.mp3");
+    fs::write(&path, bytes).expect("write fixture");
+
+    let read = LoftyMetadataService
+        .read_initial_tags(&path)
+        .expect("read the file");
+
+    let length = Duration::from_nanos(FRAMES * 1152 * 1_000_000_000 / 44_100);
+    let duration = read.metadata.duration.expect("a duration");
+    assert!(
+        duration.abs_diff(length) < Duration::from_millis(30),
+        "{duration:?} for {length:?}"
+    );
+    assert_eq!(read.metadata.bitrate_kbps, Some(128));
+    let _ = fs::remove_dir_all(root);
 }
 
 #[test]
