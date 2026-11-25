@@ -7,16 +7,18 @@
 //!
 //! Implements the shared device-sync spine of issues #23/#24: device
 //! identity and discovery ([`identity`]), an incremental content-aware
-//! differ and copy [`engine`], and three on-drive layouts —
-//! deduplicated `.m3u8`, one-folder-per-playlist, and Pioneer's
-//! `export.pdb` + ANLZ format. The library's database and DSP pipeline
-//! are not reached directly: the caller resolves a device's ticked
-//! playlists (smart playlists re-evaluated each sync) into the neutral
-//! [`model`] inputs and hands them here.
+//! differ and copy [`engine`], and four on-drive layouts —
+//! deduplicated `.m3u8`, one-folder-per-playlist, Pioneer's `export.pdb`
+//! and ANLZ format, and a classic iPod's `iTunesDB` library. The library's
+//! database and DSP pipeline are not reached directly: the caller resolves
+//! a device's ticked playlists (smart playlists re-evaluated each sync)
+//! into the neutral [`model`] inputs and hands them here.
 
+mod catalogue;
 mod device_root;
 pub mod engine;
 pub mod identity;
+mod ipod_library;
 pub mod journal;
 mod layout;
 pub mod model;
@@ -37,9 +39,10 @@ pub use model::{
     DeviceCapacity, GenreBytes, PioneerTrackAnalysis, Placement, PreparedPioneerAssets,
     PreparedSyncRequest, SourceSnapshot, SyncBlocker, SyncError, SyncFailure, SyncInputPlaylist,
     SyncInputTrack, SyncOutcome, SyncPlan, SyncProgress, SyncRequest, SyncStage, SyncTrackFailure,
+    calendar_date,
 };
 pub use source::{ensure_source_unchanged, resolve_source_fingerprint, source_file_stat};
-pub use transport::{DeviceTarget, DeviceTransport, DirectoryWorkBudget, MtpTarget};
+pub use transport::{DeviceTarget, DeviceTransport, DirectoryWorkBudget, MtpTarget, VolumeFacts};
 
 #[cfg(test)]
 mod tests {
@@ -89,6 +92,15 @@ mod tests {
                 genre: Some("House".into()),
                 composer: None,
                 comment: None,
+                album_artist: None,
+                compilation: false,
+                sort_title: None,
+                sort_artist: None,
+                sort_album: None,
+                sort_album_artist: None,
+                sort_composer: None,
+                track_total: None,
+                disc_total: None,
                 track_number: Some(i as u32),
                 disc_number: None,
                 year: Some(2020),
@@ -100,7 +112,7 @@ mod tests {
                 sample_rate_hz: 44_100,
                 bit_depth: 16,
                 source,
-                date_added: Some("2026-01-01".into()),
+                date_added: Some(1767225600),
                 extension: "mp3".into(),
             });
         }
@@ -722,6 +734,15 @@ mod tests {
             genre: None,
             composer: None,
             comment: None,
+            album_artist: None,
+            compilation: false,
+            sort_title: None,
+            sort_artist: None,
+            sort_album: None,
+            sort_album_artist: None,
+            sort_composer: None,
+            track_total: None,
+            disc_total: None,
             track_number: None,
             disc_number: None,
             year: None,
@@ -1372,7 +1393,7 @@ mod tests {
         assert_eq!(outcome.copied, 2);
         assert_eq!(
             outcome.catalogue.databases,
-            std::collections::BTreeSet::from([sustain_pioneer::database_identity(
+            std::collections::BTreeSet::from([crate::catalogue::identity(
                 &std::fs::read(pdb_on(dest)).expect("pdb")
             )])
         );
@@ -1393,7 +1414,7 @@ mod tests {
         // Once published, only the new database is Sustain's.
         assert_eq!(
             second.catalogue.databases,
-            std::collections::BTreeSet::from([sustain_pioneer::database_identity(
+            std::collections::BTreeSet::from([crate::catalogue::identity(
                 &std::fs::read(pdb_on(dest)).expect("pdb")
             )])
         );
@@ -1650,8 +1671,7 @@ mod tests {
                 &|| false,
             )
             .expect_err("the database write failed");
-            let on_drive =
-                sustain_pioneer::database_identity(&std::fs::read(pdb_on(dest)).expect("pdb"));
+            let on_drive = crate::catalogue::identity(&std::fs::read(pdb_on(dest)).expect("pdb"));
             assert!(
                 failure.catalogue.databases.contains(&on_drive),
                 "after_publishing: {after_publishing}"
@@ -2530,4 +2550,6 @@ mod tests {
         }
         count
     }
+
+    mod ipod;
 }

@@ -6,7 +6,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Sustain\n"
 "Report-Msgid-Bugs-To: https://github.com/open-sustain/sustain/issues\n"
-"POT-Creation-Date: 2026-11-25 17:16+0100\n"
+"POT-Creation-Date: 2026-11-25 17:43+0100\n"
 "PO-Revision-Date: 2026-11-16 20:38+0100\n"
 "Last-Translator: Sustain maintainers\n"
 "Language-Team: Korean\n"
@@ -83,8 +83,8 @@ msgstr "0(확인을 누르면 초기화됨)"
 msgid "5-star ratings, play count, skip count, last played, last skipped"
 msgstr "별 5개 등급, 재생 횟수, 건너뛴 횟수, 마지막 재생, 마지막 건너뜀"
 
-#: crates/app_runtime/src/device_sync.rs:630
-#: crates/app_runtime/src/device_sync.rs:686
+#: crates/app_runtime/src/device_sync.rs:644
+#: crates/app_runtime/src/device_sync.rs:700
 #, rust-format
 msgid "A device sync is already running."
 msgstr "기기 동기화가 이미 진행 중입니다."
@@ -329,7 +329,7 @@ msgid "Audio"
 msgstr "오디오"
 
 #: crates/app_runtime/src/cd_import/plan.rs:57
-#: crates/ui_gtk/src/cd_import_panel.rs:57 crates/ui_gtk/src/sidebar.rs:608
+#: crates/ui_gtk/src/cd_import_panel.rs:57 crates/ui_gtk/src/sidebar.rs:609
 #, rust-format
 msgid "Audio CD"
 msgstr "오디오 CD"
@@ -670,7 +670,7 @@ msgstr "꺼낼 마운트된 기기를 찾지 못했습니다."
 msgid "Could not open Discogs: {error}."
 msgstr "Discogs를 열지 못했습니다: {error}."
 
-#: crates/app_runtime/src/device_sync.rs:613
+#: crates/app_runtime/src/device_sync.rs:627
 #, rust-format
 msgid "Could not plan the device sync: {detail}"
 msgstr "기기 동기화 계획을 세우지 못했습니다: {detail}"
@@ -766,17 +766,17 @@ msgstr "세부 정보"
 msgid "Details…"
 msgstr "자세히…"
 
-#: crates/app_runtime/src/device_sync.rs:425
+#: crates/app_runtime/src/device_sync.rs:439
 #, rust-format
 msgid "Device"
 msgstr "기기"
 
-#: crates/app_runtime/src/notifications.rs:1206
+#: crates/app_runtime/src/notifications.rs:1228
 #, rust-format
 msgid "Device already up to date."
 msgstr "기기가 이미 최신 상태입니다."
 
-#: crates/app_runtime/src/notifications.rs:1203
+#: crates/app_runtime/src/notifications.rs:1225
 #, rust-format
 msgid "Device already up to date; {unplayable}."
 msgstr "기기가 이미 최신 상태입니다. {unplayable}."
@@ -791,7 +791,7 @@ msgstr "기기 용량을 알 수 없음"
 msgid "Device disconnected"
 msgstr "기기 연결 끊김"
 
-#: crates/app_runtime/src/device_sync.rs:416
+#: crates/app_runtime/src/device_sync.rs:430
 #, rust-format
 msgid ""
 "Device forgotten. Its saved playlists, artists, and sync history were "
@@ -799,12 +799,12 @@ msgid ""
 msgstr ""
 "기기를 삭제했습니다. 저장된 재생 목록, 아티스트, 동기화 기록이 지워졌습니다."
 
-#: crates/app_runtime/src/device_sync.rs:694
+#: crates/app_runtime/src/device_sync.rs:708
 #, rust-format
 msgid "Device sync failed to start: {detail}"
 msgstr "기기 동기화를 시작하지 못했습니다: {detail}"
 
-#: crates/app_runtime/src/device_sync.rs:750
+#: crates/app_runtime/src/device_sync.rs:764
 #, rust-format
 msgid "Device sync failed: {detail}"
 msgstr "기기 동기화 실패: {detail}"
@@ -915,7 +915,7 @@ msgstr "재생 시간(초)"
 msgid "Edit…"
 msgstr "편집…"
 
-#: crates/ui_gtk/src/cd_import_panel.rs:320 crates/ui_gtk/src/sidebar.rs:972
+#: crates/ui_gtk/src/cd_import_panel.rs:320 crates/ui_gtk/src/sidebar.rs:973
 #, rust-format
 msgid "Eject"
 msgstr "꺼내기"
@@ -1135,7 +1135,7 @@ msgid "Imported {imported} track from CD."
 msgid_plural "Imported {imported} tracks from CD."
 msgstr[0] "CD에서 트랙 {imported}개를 가져왔습니다."
 
-#: crates/ui_gtk/src/sidebar.rs:612
+#: crates/ui_gtk/src/sidebar.rs:613
 #, rust-format
 msgid "Importing"
 msgstr "가져오는 중"
@@ -1885,7 +1885,7 @@ msgid ""
 msgstr ""
 "일시 중지됨: 오디오 출력 연결이 끊겼거나 다른 응용 프로그램이 사용 중입니다."
 
-#: crates/app_runtime/src/device_sync.rs:647
+#: crates/app_runtime/src/device_sync.rs:661
 #, rust-format
 msgid "Pick at least one playlist or artist to sync to this device."
 msgstr "이 기기와 동기화할 재생 목록이나 아티스트를 하나 이상 선택하십시오."
@@ -1957,7 +1957,7 @@ msgstr "재생에 실패했습니다. 다음 트랙으로 건너뜁니다."
 msgid "Playback is not available."
 msgstr "재생을 사용할 수 없습니다."
 
-#: crates/app_runtime/src/device_sync.rs:1144
+#: crates/app_runtime/src/device_sync.rs:1158
 #, rust-format
 msgid "Playlist"
 msgstr "재생 목록"
@@ -2536,6 +2536,13 @@ msgstr "엄격한 일치"
 msgid "Sustain"
 msgstr "Sustain"
 
+#: crates/app_runtime/src/notifications.rs:1185
+#, rust-format
+msgid ""
+"Sustain could not read this iPod's serial number, which it needs to sign the "
+"iPod's library. Unplug the iPod, plug it back in, and try again."
+msgstr "Sustain이 이 iPod의 일련번호를 읽지 못했습니다. iPod 보관함에 서명하려면 일련번호가 필요합니다. iPod을 분리했다가 다시 연결한 뒤 다시 시도하세요."
+
 #: crates/app_runtime/src/playback.rs:740
 #, rust-format
 msgid ""
@@ -2544,6 +2551,13 @@ msgid ""
 msgstr ""
 "Sustain이 청취 통계를 저장하지 못했습니다. 대기 중인 재생 횟수는 메모리에 보"
 "관되며 자동으로 다시 시도합니다."
+
+#: crates/app_runtime/src/notifications.rs:1181
+#, rust-format
+msgid ""
+"Sustain does not support this iPod model. It syncs the iPod classic and the "
+"earlier iPods, the iPod mini, and the iPod nano up to the 4th generation."
+msgstr "Sustain은 이 iPod 모델을 지원하지 않습니다. iPod classic과 그 이전 iPod, iPod mini, 4세대까지의 iPod nano를 동기화합니다."
 
 #: data/io.github.open_sustain.sustain.metainfo.xml:19
 msgid ""
@@ -2582,12 +2596,12 @@ msgstr "동기화 및 제거"
 msgid "Sync anyway"
 msgstr "그래도 동기화"
 
-#: crates/app_runtime/src/notifications.rs:1231
+#: crates/app_runtime/src/notifications.rs:1253
 #, rust-format
 msgid "Sync complete: {changes}."
 msgstr "동기화 완료: {changes}."
 
-#: crates/app_runtime/src/notifications.rs:1233
+#: crates/app_runtime/src/notifications.rs:1255
 #, rust-format
 msgid "Sync complete: {changes}; {unplayable}."
 msgstr "동기화 완료: {changes}. {unplayable}."
@@ -2597,22 +2611,22 @@ msgstr "동기화 완료: {changes}. {unplayable}."
 msgid "Sync device"
 msgstr "기기 동기화"
 
-#: crates/app_runtime/src/notifications.rs:1237
+#: crates/app_runtime/src/notifications.rs:1259
 #, rust-format
 msgid "Sync partial: {changes}."
 msgstr "일부만 동기화됨: {changes}."
 
-#: crates/app_runtime/src/notifications.rs:1239
+#: crates/app_runtime/src/notifications.rs:1261
 #, rust-format
 msgid "Sync partial: {changes}; {unplayable}."
 msgstr "일부만 동기화됨: {changes}. {unplayable}."
 
-#: crates/app_runtime/src/notifications.rs:1185
+#: crates/app_runtime/src/notifications.rs:1207
 #, rust-format
 msgid "Sync stopped: {changes}."
 msgstr "동기화 중지됨: {changes}."
 
-#: crates/ui_gtk/src/sidebar.rs:572
+#: crates/ui_gtk/src/sidebar.rs:573
 #, rust-format
 msgid "Syncing"
 msgstr "동기화 중"
@@ -2645,7 +2659,7 @@ msgstr "태그"
 msgid "Take every tag and the rating from this track"
 msgstr "이 트랙의 모든 태그와 별점 사용"
 
-#: crates/app_runtime/src/device_sync.rs:638
+#: crates/app_runtime/src/device_sync.rs:652
 #, rust-format
 msgid "That device is no longer connected."
 msgstr "해당 기기가 더 이상 연결되어 있지 않습니다."
@@ -3016,7 +3030,14 @@ msgstr "이 항목과 연산자 조합은 지원되지 않습니다."
 msgid "This device cannot be ejected by the desktop."
 msgstr "이 기기는 데스크톱에서 꺼낼 수 없습니다."
 
-#: crates/app_runtime/src/device_sync.rs:502
+#: crates/app_runtime/src/notifications.rs:1177
+#, rust-format
+msgid ""
+"This device is mounted read-only, so nothing can be written to it. Unplug it "
+"and plug it back in; if it stays read-only, check its filesystem for errors."
+msgstr "이 장치는 읽기 전용으로 마운트되어 아무것도 쓸 수 없습니다. 장치를 분리했다가 다시 연결하세요. 계속 읽기 전용이면 파일 시스템에 오류가 있는지 확인하세요."
+
+#: crates/app_runtime/src/device_sync.rs:516
 #, rust-format
 msgid "This device's selection is empty."
 msgstr "이 기기의 선택 항목이 비어 있습니다."
@@ -3033,6 +3054,23 @@ msgstr ""
 "보내기가 있습니다. 동기화하면 지워집니다. 동기화하려면 드라이브에서 PIONEER/"
 "rekordbox 및 PIONEER/Artwork 폴더를 제거하세요. 그 옆의 플레이어 설정은 그대"
 "로 두어도 됩니다."
+
+#: crates/app_runtime/src/notifications.rs:1189
+#, rust-format
+msgid ""
+"This iPod holds a library from iTunes or Finder, which syncing would erase. "
+"To sync it with Sustain, restore it with iTunes first. Restoring erases "
+"everything on the iPod, voice memos and recordings included, so copy those "
+"off first."
+msgstr "이 iPod에는 iTunes 또는 Finder의 보관함이 있어 동기화하면 지워집니다. Sustain으로 동기화하려면 먼저 iTunes로 복원하세요. 복원하면 음성 메모와 녹음을 포함해 iPod의 모든 내용이 지워지므로 먼저 복사해 두세요."
+
+#: crates/app_runtime/src/notifications.rs:1172
+#, rust-format
+msgid ""
+"This iPod is formatted for a Mac, and Linux cannot write to it safely. To "
+"sync it, restore it with iTunes for Windows, which formats it for Windows. "
+"Restoring erases the iPod: copy off anything you want to keep first."
+msgstr "이 iPod은 Mac용으로 포맷되어 있어 Linux에서 안전하게 쓸 수 없습니다. 동기화하려면 Windows용 iTunes로 복원해 Windows용으로 포맷하세요. 복원하면 iPod이 지워지므로 보관할 항목은 먼저 복사하세요."
 
 #: crates/ui_gtk/src/track_info/artwork.rs:130
 #, rust-format
@@ -3319,58 +3357,58 @@ msgctxt "smart playlist operator"
 msgid "contains"
 msgstr "포함"
 
-#: crates/app_runtime/src/device_sync.rs:1230
+#: crates/app_runtime/src/device_sync.rs:1244
 #, rust-format
 msgid "could not inspect source track: {error}"
 msgstr "원본 트랙을 확인하지 못했습니다: {error}"
 
-#: crates/app_runtime/src/device_sync.rs:1060
+#: crates/app_runtime/src/device_sync.rs:1074
 #, rust-format
 msgid "could not load device artist selection: {error}"
 msgstr "기기의 아티스트 선택을 불러오지 못했습니다: {error}"
 
-#: crates/app_runtime/src/device_sync.rs:1045
+#: crates/app_runtime/src/device_sync.rs:1059
 #, rust-format
 msgid "could not load device configuration: {error}"
 msgstr "기기 설정을 불러오지 못했습니다: {error}"
 
-#: crates/app_runtime/src/device_sync.rs:1096
+#: crates/app_runtime/src/device_sync.rs:1110
 #, rust-format
 msgid "could not load device manifest: {error}"
 msgstr "기기 목록을 불러오지 못했습니다: {error}"
 
-#: crates/app_runtime/src/device_sync.rs:1105
+#: crates/app_runtime/src/device_sync.rs:1119
 #, rust-format
 msgid "could not load device playlist files: {error}"
 msgstr "기기의 재생목록 파일을 불러오지 못했습니다: {error}"
 
-#: crates/app_runtime/src/device_sync.rs:1052
+#: crates/app_runtime/src/device_sync.rs:1066
 #, rust-format
 msgid "could not load device selection: {error}"
 msgstr "기기 선택을 불러오지 못했습니다: {error}"
 
-#: crates/app_runtime/src/device_sync.rs:1078
+#: crates/app_runtime/src/device_sync.rs:1092
 #, rust-format
 msgid "could not load library tracks: {error}"
 msgstr "보관함 트랙을 불러오지 못했습니다: {error}"
 
-#: crates/app_runtime/src/device_sync.rs:1084
+#: crates/app_runtime/src/device_sync.rs:1098
 #, rust-format
 msgid "could not load playlists: {error}"
 msgstr "재생목록을 불러오지 못했습니다: {error}"
 
-#: crates/app_runtime/src/device_sync.rs:1090
+#: crates/app_runtime/src/device_sync.rs:1104
 #, rust-format
 msgid "could not load smart playlists: {error}"
 msgstr "스마트 재생목록을 불러오지 못했습니다: {error}"
 
-#: crates/app_runtime/src/device_sync.rs:1111
+#: crates/app_runtime/src/device_sync.rs:1125
 #, rust-format
 msgid "could not load the device's catalogue record: {error}"
 msgstr "기기의 카탈로그 기록을 불러오지 못했습니다: {error}"
 
-#: crates/app_runtime/src/device_sync.rs:871
-#: crates/app_runtime/src/device_sync.rs:987
+#: crates/app_runtime/src/device_sync.rs:885
+#: crates/app_runtime/src/device_sync.rs:1001
 #, rust-format
 msgid "could not open the device: {error}"
 msgstr "기기를 열지 못했습니다: {error}"
@@ -3381,12 +3419,12 @@ msgstr "기기를 열지 못했습니다: {error}"
 msgid "days"
 msgstr "일 이내"
 
-#: crates/app_runtime/src/device_sync.rs:996
+#: crates/app_runtime/src/device_sync.rs:1010
 #, rust-format
 msgid "device capacity probe failed: {error}"
 msgstr "기기 용량을 확인하지 못했습니다: {error}"
 
-#: crates/app_runtime/src/device_sync.rs:1049
+#: crates/app_runtime/src/device_sync.rs:1063
 #, rust-format
 msgid "device configuration is unavailable"
 msgstr "기기 설정을 사용할 수 없습니다"
@@ -3604,7 +3642,7 @@ msgstr "다음으로 시작"
 msgid "the disc in the drive changed during import"
 msgstr "가져오는 도중 드라이브의 디스크가 바뀌었습니다"
 
-#: crates/app_runtime/src/device_sync.rs:525
+#: crates/app_runtime/src/device_sync.rs:539
 #, rust-format
 msgid "the library is not open"
 msgstr "보관함이 열려 있지 않습니다"
@@ -3908,7 +3946,7 @@ msgid_plural "{count} tracks"
 msgstr[0] "트랙 {count}개"
 
 #: crates/app_runtime/src/notifications.rs:722
-#: crates/app_runtime/src/notifications.rs:1213
+#: crates/app_runtime/src/notifications.rs:1235
 #, rust-format
 msgid "{count} track added"
 msgid_plural "{count} tracks added"
@@ -3926,7 +3964,7 @@ msgid "{count} track indexed ({percent}% audio profiled)"
 msgid_plural "{count} tracks indexed ({percent}% audio profiled)"
 msgstr[0] "트랙 {count}개 색인됨(오디오 프로필 {percent}%)"
 
-#: crates/app_runtime/src/notifications.rs:1193
+#: crates/app_runtime/src/notifications.rs:1215
 #, rust-format
 msgid "{count} track left off: the device cannot play its format"
 msgid_plural "{count} tracks left off: the device cannot play their format"

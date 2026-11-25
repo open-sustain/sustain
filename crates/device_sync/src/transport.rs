@@ -56,6 +56,18 @@ pub struct MtpTarget {
     pub storage: String,
 }
 
+/// Facts about the filesystem a transport writes to, read from the very
+/// root being written, so they are current when the sync runs.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct VolumeFacts {
+    /// The filesystem is HFS+: a Mac-formatted iPod.
+    pub hfs_plus: bool,
+    /// The filesystem is mounted read-only.
+    pub read_only: bool,
+    /// The serial number of the USB device that holds the filesystem.
+    pub usb_serial: Option<String>,
+}
+
 /// Root-relative storage operations the sync engine needs from a device.
 ///
 /// Every path is a [`DeviceRelativePath`] beneath the transport's own
@@ -67,6 +79,13 @@ pub struct MtpTarget {
 pub trait DeviceTransport {
     /// Total and available bytes of the device's filesystem.
     fn capacity(&self) -> io::Result<DeviceCapacity>;
+
+    /// What the filesystem behind the root is, for the layouts that must
+    /// know. A transport that cannot tell reports [`VolumeFacts::default`]:
+    /// a writable filesystem of no particular kind, on no USB device.
+    fn volume_facts(&self) -> io::Result<VolumeFacts> {
+        Ok(VolumeFacts::default())
+    }
 
     /// Create `path` and every missing ancestor directory.
     fn ensure_dir_all(&self, path: &DeviceRelativePath) -> io::Result<()>;

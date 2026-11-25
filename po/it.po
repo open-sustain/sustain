@@ -6,7 +6,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Sustain\n"
 "Report-Msgid-Bugs-To: https://github.com/open-sustain/sustain/issues\n"
-"POT-Creation-Date: 2026-11-25 17:16+0100\n"
+"POT-Creation-Date: 2026-11-25 17:43+0100\n"
 "PO-Revision-Date: 2026-11-16 20:38+0100\n"
 "Last-Translator: Sustain maintainers\n"
 "Language-Team: Italian\n"
@@ -86,8 +86,8 @@ msgstr ""
 "valutazioni a 5 stelle, riproduzioni, salti, ultima riproduzione, ultimo "
 "salto"
 
-#: crates/app_runtime/src/device_sync.rs:630
-#: crates/app_runtime/src/device_sync.rs:686
+#: crates/app_runtime/src/device_sync.rs:644
+#: crates/app_runtime/src/device_sync.rs:700
 #, rust-format
 msgid "A device sync is already running."
 msgstr "Una sincronizzazione del dispositivo è già in corso."
@@ -337,7 +337,7 @@ msgid "Audio"
 msgstr "Audio"
 
 #: crates/app_runtime/src/cd_import/plan.rs:57
-#: crates/ui_gtk/src/cd_import_panel.rs:57 crates/ui_gtk/src/sidebar.rs:608
+#: crates/ui_gtk/src/cd_import_panel.rs:57 crates/ui_gtk/src/sidebar.rs:609
 #, rust-format
 msgid "Audio CD"
 msgstr "CD audio"
@@ -683,7 +683,7 @@ msgstr "Impossibile trovare il dispositivo montato da espellere."
 msgid "Could not open Discogs: {error}."
 msgstr "Impossibile aprire Discogs: {error}."
 
-#: crates/app_runtime/src/device_sync.rs:613
+#: crates/app_runtime/src/device_sync.rs:627
 #, rust-format
 msgid "Could not plan the device sync: {detail}"
 msgstr "Impossibile pianificare la sincronizzazione del dispositivo: {detail}"
@@ -780,17 +780,17 @@ msgstr "Dettagli"
 msgid "Details…"
 msgstr "Dettagli…"
 
-#: crates/app_runtime/src/device_sync.rs:425
+#: crates/app_runtime/src/device_sync.rs:439
 #, rust-format
 msgid "Device"
 msgstr "Dispositivo"
 
-#: crates/app_runtime/src/notifications.rs:1206
+#: crates/app_runtime/src/notifications.rs:1228
 #, rust-format
 msgid "Device already up to date."
 msgstr "Il dispositivo è già aggiornato."
 
-#: crates/app_runtime/src/notifications.rs:1203
+#: crates/app_runtime/src/notifications.rs:1225
 #, rust-format
 msgid "Device already up to date; {unplayable}."
 msgstr "Il dispositivo è già aggiornato; {unplayable}."
@@ -805,7 +805,7 @@ msgstr "Capacità del dispositivo non disponibile"
 msgid "Device disconnected"
 msgstr "Dispositivo scollegato"
 
-#: crates/app_runtime/src/device_sync.rs:416
+#: crates/app_runtime/src/device_sync.rs:430
 #, rust-format
 msgid ""
 "Device forgotten. Its saved playlists, artists, and sync history were "
@@ -814,12 +814,12 @@ msgstr ""
 "Dispositivo dimenticato. Le playlist, gli artisti e la cronologia di "
 "sincronizzazione salvati sono stati cancellati."
 
-#: crates/app_runtime/src/device_sync.rs:694
+#: crates/app_runtime/src/device_sync.rs:708
 #, rust-format
 msgid "Device sync failed to start: {detail}"
 msgstr "Impossibile avviare la sincronizzazione del dispositivo: {detail}"
 
-#: crates/app_runtime/src/device_sync.rs:750
+#: crates/app_runtime/src/device_sync.rs:764
 #, rust-format
 msgid "Device sync failed: {detail}"
 msgstr "Sincronizzazione del dispositivo non riuscita: {detail}"
@@ -930,7 +930,7 @@ msgstr "Durata (secondi)"
 msgid "Edit…"
 msgstr "Modifica…"
 
-#: crates/ui_gtk/src/cd_import_panel.rs:320 crates/ui_gtk/src/sidebar.rs:972
+#: crates/ui_gtk/src/cd_import_panel.rs:320 crates/ui_gtk/src/sidebar.rs:973
 #, rust-format
 msgid "Eject"
 msgstr "Espelli"
@@ -1157,7 +1157,7 @@ msgid_plural "Imported {imported} tracks from CD."
 msgstr[0] "{imported} brano importato dal CD."
 msgstr[1] "{imported} brani importati dal CD."
 
-#: crates/ui_gtk/src/sidebar.rs:612
+#: crates/ui_gtk/src/sidebar.rs:613
 #, rust-format
 msgid "Importing"
 msgstr "Importazione"
@@ -1934,7 +1934,7 @@ msgid ""
 msgstr ""
 "In pausa: l'uscita audio è stata scollegata o presa da un'altra applicazione."
 
-#: crates/app_runtime/src/device_sync.rs:647
+#: crates/app_runtime/src/device_sync.rs:661
 #, rust-format
 msgid "Pick at least one playlist or artist to sync to this device."
 msgstr ""
@@ -2010,7 +2010,7 @@ msgstr "Riproduzione non riuscita. Passaggio al brano successivo."
 msgid "Playback is not available."
 msgstr "La riproduzione non è disponibile."
 
-#: crates/app_runtime/src/device_sync.rs:1144
+#: crates/app_runtime/src/device_sync.rs:1158
 #, rust-format
 msgid "Playlist"
 msgstr "Playlist"
@@ -2610,6 +2610,13 @@ msgstr "Corrispondenza rigorosa"
 msgid "Sustain"
 msgstr "Sustain"
 
+#: crates/app_runtime/src/notifications.rs:1185
+#, rust-format
+msgid ""
+"Sustain could not read this iPod's serial number, which it needs to sign the "
+"iPod's library. Unplug the iPod, plug it back in, and try again."
+msgstr "Sustain non è riuscito a leggere il numero di serie di questo iPod, necessario per firmarne la libreria. Scollega l’iPod, ricollegalo e riprova."
+
 #: crates/app_runtime/src/playback.rs:740
 #, rust-format
 msgid ""
@@ -2619,6 +2626,13 @@ msgstr ""
 "Sustain non è riuscito a salvare le statistiche di ascolto. Il conteggio "
 "delle riproduzioni in sospeso è conservato in memoria e verrà ritentato "
 "automaticamente."
+
+#: crates/app_runtime/src/notifications.rs:1181
+#, rust-format
+msgid ""
+"Sustain does not support this iPod model. It syncs the iPod classic and the "
+"earlier iPods, the iPod mini, and the iPod nano up to the 4th generation."
+msgstr "Sustain non supporta questo modello di iPod. Sincronizza l’iPod classic e gli iPod precedenti, l’iPod mini e l’iPod nano fino alla 4ª generazione."
 
 #: data/io.github.open_sustain.sustain.metainfo.xml:19
 msgid ""
@@ -2660,12 +2674,12 @@ msgstr "Sincronizza e rimuovi"
 msgid "Sync anyway"
 msgstr "Sincronizza comunque"
 
-#: crates/app_runtime/src/notifications.rs:1231
+#: crates/app_runtime/src/notifications.rs:1253
 #, rust-format
 msgid "Sync complete: {changes}."
 msgstr "Sincronizzazione completata: {changes}."
 
-#: crates/app_runtime/src/notifications.rs:1233
+#: crates/app_runtime/src/notifications.rs:1255
 #, rust-format
 msgid "Sync complete: {changes}; {unplayable}."
 msgstr "Sincronizzazione completata: {changes}; {unplayable}."
@@ -2675,22 +2689,22 @@ msgstr "Sincronizzazione completata: {changes}; {unplayable}."
 msgid "Sync device"
 msgstr "Sincronizza dispositivo"
 
-#: crates/app_runtime/src/notifications.rs:1237
+#: crates/app_runtime/src/notifications.rs:1259
 #, rust-format
 msgid "Sync partial: {changes}."
 msgstr "Sincronizzazione parziale: {changes}."
 
-#: crates/app_runtime/src/notifications.rs:1239
+#: crates/app_runtime/src/notifications.rs:1261
 #, rust-format
 msgid "Sync partial: {changes}; {unplayable}."
 msgstr "Sincronizzazione parziale: {changes}; {unplayable}."
 
-#: crates/app_runtime/src/notifications.rs:1185
+#: crates/app_runtime/src/notifications.rs:1207
 #, rust-format
 msgid "Sync stopped: {changes}."
 msgstr "Sincronizzazione interrotta: {changes}."
 
-#: crates/ui_gtk/src/sidebar.rs:572
+#: crates/ui_gtk/src/sidebar.rs:573
 #, rust-format
 msgid "Syncing"
 msgstr "Sincronizzazione"
@@ -2726,7 +2740,7 @@ msgstr "Tag"
 msgid "Take every tag and the rating from this track"
 msgstr "Prendi tutti i tag e la valutazione da questo brano"
 
-#: crates/app_runtime/src/device_sync.rs:638
+#: crates/app_runtime/src/device_sync.rs:652
 #, rust-format
 msgid "That device is no longer connected."
 msgstr "Quel dispositivo non è più collegato."
@@ -3139,7 +3153,14 @@ msgstr "Questa combinazione di campo e operatore non è supportata."
 msgid "This device cannot be ejected by the desktop."
 msgstr "Questo dispositivo non può essere espulso dal desktop."
 
-#: crates/app_runtime/src/device_sync.rs:502
+#: crates/app_runtime/src/notifications.rs:1177
+#, rust-format
+msgid ""
+"This device is mounted read-only, so nothing can be written to it. Unplug it "
+"and plug it back in; if it stays read-only, check its filesystem for errors."
+msgstr "Questo dispositivo è montato in sola lettura, quindi non è possibile scriverci nulla. Scollegalo e ricollegalo; se resta in sola lettura, controlla che il suo file system non abbia errori."
+
+#: crates/app_runtime/src/device_sync.rs:516
 #, rust-format
 msgid "This device's selection is empty."
 msgstr "La selezione di questo dispositivo è vuota."
@@ -3157,6 +3178,23 @@ msgstr ""
 "cancellerebbe: rimuovi le cartelle PIONEER/rekordbox e PIONEER/Artwork "
 "dall'unità per sincronizzare. Le impostazioni del lettore accanto possono "
 "restare."
+
+#: crates/app_runtime/src/notifications.rs:1189
+#, rust-format
+msgid ""
+"This iPod holds a library from iTunes or Finder, which syncing would erase. "
+"To sync it with Sustain, restore it with iTunes first. Restoring erases "
+"everything on the iPod, voice memos and recordings included, so copy those "
+"off first."
+msgstr "Questo iPod contiene una libreria di iTunes o del Finder, che la sincronizzazione cancellerebbe. Per sincronizzarlo con Sustain, prima ripristinalo con iTunes. Il ripristino cancella tutto il contenuto dell’iPod, memo vocali e registrazioni compresi, quindi copiali prima."
+
+#: crates/app_runtime/src/notifications.rs:1172
+#, rust-format
+msgid ""
+"This iPod is formatted for a Mac, and Linux cannot write to it safely. To "
+"sync it, restore it with iTunes for Windows, which formats it for Windows. "
+"Restoring erases the iPod: copy off anything you want to keep first."
+msgstr "Questo iPod è formattato per Mac e Linux non può scriverci in sicurezza. Per sincronizzarlo, ripristinalo con iTunes per Windows, che lo formatta per Windows. Il ripristino cancella l’iPod: prima copia tutto ciò che vuoi conservare."
 
 #: crates/ui_gtk/src/track_info/artwork.rs:130
 #, rust-format
@@ -3446,58 +3484,58 @@ msgctxt "smart playlist operator"
 msgid "contains"
 msgstr "contiene"
 
-#: crates/app_runtime/src/device_sync.rs:1230
+#: crates/app_runtime/src/device_sync.rs:1244
 #, rust-format
 msgid "could not inspect source track: {error}"
 msgstr "impossibile esaminare il brano di origine: {error}"
 
-#: crates/app_runtime/src/device_sync.rs:1060
+#: crates/app_runtime/src/device_sync.rs:1074
 #, rust-format
 msgid "could not load device artist selection: {error}"
 msgstr "impossibile caricare la selezione di artisti del dispositivo: {error}"
 
-#: crates/app_runtime/src/device_sync.rs:1045
+#: crates/app_runtime/src/device_sync.rs:1059
 #, rust-format
 msgid "could not load device configuration: {error}"
 msgstr "impossibile caricare la configurazione del dispositivo: {error}"
 
-#: crates/app_runtime/src/device_sync.rs:1096
+#: crates/app_runtime/src/device_sync.rs:1110
 #, rust-format
 msgid "could not load device manifest: {error}"
 msgstr "impossibile caricare il manifesto del dispositivo: {error}"
 
-#: crates/app_runtime/src/device_sync.rs:1105
+#: crates/app_runtime/src/device_sync.rs:1119
 #, rust-format
 msgid "could not load device playlist files: {error}"
 msgstr "impossibile caricare i file delle playlist del dispositivo: {error}"
 
-#: crates/app_runtime/src/device_sync.rs:1052
+#: crates/app_runtime/src/device_sync.rs:1066
 #, rust-format
 msgid "could not load device selection: {error}"
 msgstr "impossibile caricare la selezione del dispositivo: {error}"
 
-#: crates/app_runtime/src/device_sync.rs:1078
+#: crates/app_runtime/src/device_sync.rs:1092
 #, rust-format
 msgid "could not load library tracks: {error}"
 msgstr "impossibile caricare i brani della libreria: {error}"
 
-#: crates/app_runtime/src/device_sync.rs:1084
+#: crates/app_runtime/src/device_sync.rs:1098
 #, rust-format
 msgid "could not load playlists: {error}"
 msgstr "impossibile caricare le playlist: {error}"
 
-#: crates/app_runtime/src/device_sync.rs:1090
+#: crates/app_runtime/src/device_sync.rs:1104
 #, rust-format
 msgid "could not load smart playlists: {error}"
 msgstr "impossibile caricare le playlist smart: {error}"
 
-#: crates/app_runtime/src/device_sync.rs:1111
+#: crates/app_runtime/src/device_sync.rs:1125
 #, rust-format
 msgid "could not load the device's catalogue record: {error}"
 msgstr "impossibile caricare il registro del catalogo del dispositivo: {error}"
 
-#: crates/app_runtime/src/device_sync.rs:871
-#: crates/app_runtime/src/device_sync.rs:987
+#: crates/app_runtime/src/device_sync.rs:885
+#: crates/app_runtime/src/device_sync.rs:1001
 #, rust-format
 msgid "could not open the device: {error}"
 msgstr "impossibile aprire il dispositivo: {error}"
@@ -3508,12 +3546,12 @@ msgstr "impossibile aprire il dispositivo: {error}"
 msgid "days"
 msgstr "giorni"
 
-#: crates/app_runtime/src/device_sync.rs:996
+#: crates/app_runtime/src/device_sync.rs:1010
 #, rust-format
 msgid "device capacity probe failed: {error}"
 msgstr "impossibile rilevare la capacità del dispositivo: {error}"
 
-#: crates/app_runtime/src/device_sync.rs:1049
+#: crates/app_runtime/src/device_sync.rs:1063
 #, rust-format
 msgid "device configuration is unavailable"
 msgstr "la configurazione del dispositivo non è disponibile"
@@ -3732,7 +3770,7 @@ msgstr "inizia con"
 msgid "the disc in the drive changed during import"
 msgstr "il disco nell'unità è cambiato durante l'importazione"
 
-#: crates/app_runtime/src/device_sync.rs:525
+#: crates/app_runtime/src/device_sync.rs:539
 #, rust-format
 msgid "the library is not open"
 msgstr "la libreria non è aperta"
@@ -4072,7 +4110,7 @@ msgstr[0] "{count} brano"
 msgstr[1] "{count} brani"
 
 #: crates/app_runtime/src/notifications.rs:722
-#: crates/app_runtime/src/notifications.rs:1213
+#: crates/app_runtime/src/notifications.rs:1235
 #, rust-format
 msgid "{count} track added"
 msgid_plural "{count} tracks added"
@@ -4093,7 +4131,7 @@ msgid_plural "{count} tracks indexed ({percent}% audio profiled)"
 msgstr[0] "{count} brano indicizzato ({percent}% con profilo audio)"
 msgstr[1] "{count} brani indicizzati ({percent}% con profilo audio)"
 
-#: crates/app_runtime/src/notifications.rs:1193
+#: crates/app_runtime/src/notifications.rs:1215
 #, rust-format
 msgid "{count} track left off: the device cannot play its format"
 msgid_plural "{count} tracks left off: the device cannot play their format"

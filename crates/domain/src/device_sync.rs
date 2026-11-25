@@ -133,16 +133,25 @@ pub enum DeviceLayout {
     /// Pioneer's on-device database format (`export.pdb` + ANLZ
     /// waveforms), consumable by Pioneer XDJ/CDJ hardware and Rekordbox.
     Pioneer,
+    /// The library a classic iPod's stock firmware reads: audio under
+    /// `iPod_Control/Music`, the `iTunesDB` catalogue and its covers.
+    Ipod,
 }
 
 impl DeviceLayout {
-    pub const ALL: [Self; 3] = [Self::M3u, Self::FolderPerPlaylist, Self::Pioneer];
+    pub const ALL: [Self; 4] = [
+        Self::M3u,
+        Self::FolderPerPlaylist,
+        Self::Pioneer,
+        Self::Ipod,
+    ];
 
     pub const fn as_db(self) -> i64 {
         match self {
             Self::M3u => 0,
             Self::FolderPerPlaylist => 1,
             Self::Pioneer => 2,
+            Self::Ipod => 3,
         }
     }
 
@@ -151,8 +160,25 @@ impl DeviceLayout {
             0 => Some(Self::M3u),
             1 => Some(Self::FolderPerPlaylist),
             2 => Some(Self::Pioneer),
+            3 => Some(Self::Ipod),
             _ => None,
         }
+    }
+
+    /// The layouts a device of `kind` can be given, in chooser order. Only
+    /// an iPod gets the iPod layout, and an iPod gets no Pioneer export.
+    pub const fn offered_for(kind: DeviceKind) -> &'static [Self] {
+        match kind {
+            DeviceKind::UsbDrive | DeviceKind::Android => {
+                &[Self::M3u, Self::FolderPerPlaylist, Self::Pioneer]
+            }
+            DeviceKind::Ipod => &[Self::Ipod, Self::M3u, Self::FolderPerPlaylist],
+        }
+    }
+
+    /// The layout a newly seen device of `kind` starts with.
+    pub const fn default_for(kind: DeviceKind) -> Self {
+        Self::offered_for(kind)[0]
     }
 
     /// Short label for the UI layout chooser.
@@ -161,6 +187,7 @@ impl DeviceLayout {
             Self::M3u => "Playlists as .m3u8",
             Self::FolderPerPlaylist => "One folder per playlist",
             Self::Pioneer => "Pioneer (Rekordbox / XDJ)",
+            Self::Ipod => "iPod (beta)",
         }
     }
 }
@@ -228,15 +255,19 @@ impl FilesPerFolderCap {
     }
 }
 
-/// What kind of device this is — drives the sidebar icon and the default
-/// sub-path. Android phones are reached over MTP (see the `device_mtp`
-/// crate); plain drives are mounted block filesystems.
+/// What kind of device this is — drives the sidebar icon, the default
+/// sub-path and the layouts on offer. Android phones are reached over MTP
+/// (see the `device_mtp` crate); plain drives and iPods are mounted block
+/// filesystems.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DeviceKind {
     /// A mounted block device: USB stick, SD card, external SSD.
     UsbDrive,
     /// An Android phone or tablet reached over MTP.
     Android,
+    /// A classic iPod in disk mode: a mounted volume whose root holds an
+    /// `iPod_Control` folder.
+    Ipod,
 }
 
 impl DeviceKind {
@@ -244,6 +275,7 @@ impl DeviceKind {
         match self {
             Self::UsbDrive => 0,
             Self::Android => 1,
+            Self::Ipod => 2,
         }
     }
 
@@ -251,6 +283,7 @@ impl DeviceKind {
         match value {
             0 => Some(Self::UsbDrive),
             1 => Some(Self::Android),
+            2 => Some(Self::Ipod),
             _ => None,
         }
     }
@@ -262,7 +295,7 @@ impl DeviceKind {
     /// `/sdcard/Music/...` exactly as Android expects.
     pub const fn default_sub_path(self) -> &'static str {
         match self {
-            Self::UsbDrive | Self::Android => "",
+            Self::UsbDrive | Self::Android | Self::Ipod => "",
         }
     }
 }
@@ -298,7 +331,7 @@ pub struct SyncDevice {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct CatalogueRecord {
     /// The track databases Sustain may have left on the device (Pioneer's
-    /// `export.pdb`, the iPod's `iTunesDB` and `ArtworkDB`): the ones it
+    /// `export.pdb`, the iPod's `iTunesDB`): the ones it
     /// last wrote — and while a sync publishes new ones, those too. Empty if
     /// it has written none.
     pub databases: BTreeSet<CatalogueDatabase>,
@@ -383,6 +416,20 @@ mod tests {
     }
 
     #[test]
+    fn only_an_ipod_is_offered_the_ipod_layout_and_starts_with_it() {
+        for kind in [DeviceKind::UsbDrive, DeviceKind::Android] {
+            assert!(!DeviceLayout::offered_for(kind).contains(&DeviceLayout::Ipod));
+            assert_eq!(DeviceLayout::default_for(kind), DeviceLayout::M3u);
+        }
+        let ipod = DeviceLayout::offered_for(DeviceKind::Ipod);
+        assert!(!ipod.contains(&DeviceLayout::Pioneer));
+        assert_eq!(
+            DeviceLayout::default_for(DeviceKind::Ipod),
+            DeviceLayout::Ipod
+        );
+    }
+
+    #[test]
     fn cap_round_trips_and_reports_limit() {
         for cap in FilesPerFolderCap::ALL {
             assert_eq!(FilesPerFolderCap::from_db(cap.as_db()), Some(cap));
@@ -393,7 +440,7 @@ mod tests {
 
     #[test]
     fn kind_round_trips_and_has_default_sub_path() {
-        for kind in [DeviceKind::UsbDrive, DeviceKind::Android] {
+        for kind in [DeviceKind::UsbDrive, DeviceKind::Android, DeviceKind::Ipod] {
             assert_eq!(DeviceKind::from_db(kind.as_db()), Some(kind));
         }
         assert_eq!(DeviceKind::Android.default_sub_path(), "");

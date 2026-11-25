@@ -293,9 +293,23 @@ impl ApplicationRuntime {
             .sync_device(&connected.id)
             .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?
         {
+            let mut changed = false;
             // Keep the volume id fresh for marker-loss fallback recognition.
             if existing.volume_id != connected.volume_id && connected.volume_id.is_some() {
                 existing.volume_id = connected.volume_id.clone();
+                changed = true;
+            }
+            // A device configured before Sustain told iPods apart is stored
+            // as a plain drive; a layout its kind is not offered goes back
+            // to the kind's default.
+            if existing.kind != connected.kind {
+                existing.kind = connected.kind;
+                if !DeviceLayout::offered_for(existing.kind).contains(&existing.layout) {
+                    existing.layout = DeviceLayout::default_for(existing.kind);
+                }
+                changed = true;
+            }
+            if changed {
                 store
                     .save_sync_device(&existing)
                     .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
@@ -306,7 +320,7 @@ impl ApplicationRuntime {
             id: connected.id.clone(),
             label: connected.label.clone(),
             kind: connected.kind,
-            layout: DeviceLayout::M3u,
+            layout: DeviceLayout::default_for(connected.kind),
             sub_path: DeviceRelativePath::new(connected.kind.default_sub_path())
                 .expect("static device default sub-path is safe"),
             files_per_folder_cap: FilesPerFolderCap::Unlimited,
@@ -530,7 +544,7 @@ impl ApplicationRuntime {
             store,
             library_path: self.settings.library.path.clone(),
             clock: self.clock.clone(),
-            export_date: unix_to_ymd(self.clock_unix_secs()),
+            export_date: sustain_device_sync::calendar_date(self.clock_unix_secs()),
         };
         if let Err(error) = self.device_plan_scheduler.request_plan(
             generation,
@@ -662,7 +676,7 @@ impl ApplicationRuntime {
             metadata_service,
             library_path: self.settings.library.path.clone(),
             clock: self.clock.clone(),
-            export_date: unix_to_ymd(self.clock_unix_secs()),
+            export_date: sustain_device_sync::calendar_date(self.clock_unix_secs()),
             remove_stale,
         };
         match self
@@ -1408,8 +1422,17 @@ fn sync_input_track(track: &Track, source_path: PathBuf, source: SourceSnapshot)
         genre: metadata.genre.clone(),
         composer: metadata.composer.clone(),
         comment: metadata.comments.clone(),
+        album_artist: metadata.album_artist.clone(),
+        compilation: metadata.compilation.unwrap_or(false),
+        sort_title: metadata.title_sort.clone(),
+        sort_artist: metadata.artist_sort.clone(),
+        sort_album: metadata.album_sort.clone(),
+        sort_album_artist: metadata.album_artist_sort.clone(),
+        sort_composer: metadata.composer_sort.clone(),
         track_number: metadata.track_number,
+        track_total: metadata.track_total,
         disc_number: metadata.disc_number,
+        disc_total: metadata.disc_total,
         year: metadata.year.map(|y| y.max(0) as u32),
         duration_ms: metadata.duration.map(|d| d.as_millis() as u32).unwrap_or(0),
         rating: track.rating.stars(),
@@ -1419,13 +1442,11 @@ fn sync_input_track(track: &Track, source_path: PathBuf, source: SourceSnapshot)
         sample_rate_hz: metadata.sample_rate_hz.unwrap_or(44_100),
         bit_depth: metadata.bit_depth.map_or(16, u16::from),
         source,
-        date_added: track.statistics.date_added_at.map(|t| {
-            unix_to_ymd(
-                t.duration_since(UNIX_EPOCH)
-                    .map(|d| d.as_secs() as i64)
-                    .unwrap_or(0),
-            )
-        }),
+        date_added: track
+            .statistics
+            .date_added_at
+            .and_then(|added| added.duration_since(UNIX_EPOCH).ok())
+            .and_then(|since| i64::try_from(since.as_secs()).ok()),
         extension,
     }
 }
@@ -1449,23 +1470,6 @@ fn source_snapshot(
         Some(fingerprint) if fingerprint.stat == stat => SourceSnapshot::resolved(fingerprint),
         _ => SourceSnapshot::provisional(stat),
     }))
-}
-
-/// Format a Unix timestamp (seconds) as `YYYY-MM-DD` in UTC, without a
-/// date-library dependency (Howard Hinnant's civil-from-days algorithm).
-fn unix_to_ymd(secs: i64) -> String {
-    let days = secs.div_euclid(86_400);
-    let z = days + 719_468;
-    let era = (if z >= 0 { z } else { z - 146_096 }) / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let year = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = if month <= 2 { year + 1 } else { year };
-    format!("{year:04}-{month:02}-{day:02}")
 }
 
 #[cfg(test)]
@@ -1493,7 +1497,7 @@ mod tests {
     use super::{
         ArtistTracks, ConnectedDevice, DeviceMountIdentity, DevicePlanResult, DevicePlanSnapshot,
         DeviceSyncPlanState, StoreManifestJournal, build_worker_sync_request, mount_identity,
-        prepare_sync_request, save_synced_manifest, sync_input_track, unix_to_ymd,
+        prepare_sync_request, save_synced_manifest, sync_input_track,
     };
     use crate::ApplicationRuntime;
 
@@ -1604,6 +1608,15 @@ mod tests {
                     genre: None,
                     composer: None,
                     comment: None,
+                    album_artist: None,
+                    compilation: false,
+                    sort_title: None,
+                    sort_artist: None,
+                    sort_album: None,
+                    sort_album_artist: None,
+                    sort_composer: None,
+                    track_total: None,
+                    disc_total: None,
                     track_number: None,
                     disc_number: None,
                     year: None,
@@ -1628,14 +1641,6 @@ mod tests {
             remove_stale: false,
             export_date: "2026-06-01".to_owned(),
         }
-    }
-
-    #[test]
-    fn formats_known_dates() {
-        assert_eq!(unix_to_ymd(0), "1970-01-01");
-        assert_eq!(unix_to_ymd(1_700_000_000), "2023-11-14");
-        // 2026-05-29 00:00:00 UTC
-        assert_eq!(unix_to_ymd(1_780_012_800), "2026-05-29");
     }
 
     #[test]
@@ -1810,6 +1815,48 @@ mod tests {
             request.tracks[0].track_id,
             TrackId::new(1).expect("track id")
         );
+    }
+
+    /// A drive first seen before Sustain told iPods apart is an iPod once
+    /// discovery says so: it keeps an M3U layout, which an iPod running
+    /// Rockbox reads, and trades a Pioneer one for the iPod layout.
+    #[test]
+    fn a_device_found_to_be_an_ipod_is_offered_the_ipod_layouts() {
+        let runtime = ApplicationRuntime::new()
+            .with_library_services(
+                std::sync::Arc::new(SqliteLibraryStore::open_in_memory().expect("store")),
+                std::sync::Arc::new(CountingMetadataService::default()),
+            )
+            .expect("library services");
+        let new_ipod = ConnectedDevice {
+            kind: DeviceKind::Ipod,
+            ..connected("new-ipod", "/mnt/new-ipod")
+        };
+        let config = runtime.ensure_device_config(&new_ipod).expect("config");
+        assert_eq!(config.layout, DeviceLayout::Ipod);
+
+        for (before, after) in [
+            (DeviceLayout::M3u, DeviceLayout::M3u),
+            (DeviceLayout::Pioneer, DeviceLayout::Ipod),
+        ] {
+            let drive = connected("old-ipod", "/mnt/old-ipod");
+            let mut stored = runtime.ensure_device_config(&drive).expect("config");
+            stored.layout = before;
+            runtime.persist_device(&stored).expect("persist");
+            let ipod = ConnectedDevice {
+                kind: DeviceKind::Ipod,
+                ..drive
+            };
+            let config = runtime.ensure_device_config(&ipod).expect("config");
+            assert_eq!((config.kind, config.layout), (DeviceKind::Ipod, after));
+            assert_eq!(runtime.device_config(&ipod.id), Some(config));
+            runtime
+                .library_store
+                .as_ref()
+                .expect("store")
+                .delete_sync_device(&ipod.id)
+                .expect("forget");
+        }
     }
 
     /// Each plan the planner could not make is reported with what

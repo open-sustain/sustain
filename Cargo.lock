@@ -2177,6 +2177,7 @@ dependencies = [
  "rustix",
  "sha2",
  "sustain-domain",
+ "sustain-ipod",
  "sustain-pioneer",
  "tempfile",
 ]

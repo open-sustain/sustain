@@ -13,22 +13,41 @@ use sustain_domain::{
 };
 use sustain_pioneer::path_hash::AnlzSlot;
 
+use crate::ipod_library::{self, Ipod};
 use crate::journal::ManifestJournal;
 use crate::layout;
 use crate::model::{
-    GenreBytes, Placement, PreparedSyncRequest, SyncError, SyncFailure, SyncOutcome, SyncPlan,
-    SyncProgress, SyncRequest, SyncStage, SyncTrackFailure,
+    GenreBytes, Placement, PreparedSyncRequest, SyncBlocker, SyncError, SyncFailure, SyncOutcome,
+    SyncPlan, SyncProgress, SyncRequest, SyncStage, SyncTrackFailure,
 };
 use crate::pioneer_export;
 use crate::transport::DeviceTransport;
 
-/// The on-device subtree to write under: the Pioneer format owns the drive
-/// root (its `PIONEER/` tree is expected there); the other layouts honor the
-/// device's validated configured sub-path.
+/// The on-device subtree to write under: the Pioneer and iPod formats own
+/// the drive root (their `PIONEER/` and `iPod_Control/` trees are expected
+/// there); the other layouts honor the device's validated configured
+/// sub-path.
 fn device_base(req: &SyncRequest) -> DeviceRelativePath {
     match req.device.layout {
-        DeviceLayout::Pioneer => DeviceRelativePath::root(),
-        _ => req.device.sub_path.clone(),
+        DeviceLayout::Pioneer | DeviceLayout::Ipod => DeviceRelativePath::root(),
+        DeviceLayout::M3u | DeviceLayout::FolderPerPlaylist => req.device.sub_path.clone(),
+    }
+}
+
+/// The iPod behind `transport`, once it is known Sustain may write its
+/// library.
+fn writable_ipod(transport: &dyn DeviceTransport, req: &SyncRequest) -> Result<Ipod, SyncError> {
+    let ipod = ipod_library::identify(transport)?;
+    ipod_library::ensure_library_is_ours(transport, &req.previous_catalogue)?;
+    Ok(ipod)
+}
+
+/// The blocker a refused `check` names; any other failure stays an error.
+fn blocker_of(check: Result<(), SyncError>) -> Result<Option<SyncBlocker>, SyncError> {
+    match check {
+        Ok(()) => Ok(None),
+        Err(SyncError::Blocked(blocker)) => Ok(Some(blocker)),
+        Err(error) => Err(error),
     }
 }
 
@@ -164,14 +183,12 @@ pub fn plan(transport: &dyn DeviceTransport, req: &SyncRequest) -> Result<SyncPl
         .sum();
     let genre_bytes = genre_breakdown(req, &placements);
     let blocker = match req.device.layout {
-        DeviceLayout::Pioneer => {
-            match pioneer_export::ensure_database_is_ours(transport, &base, &req.previous_catalogue)
-            {
-                Ok(()) => None,
-                Err(SyncError::Blocked(blocker)) => Some(blocker),
-                Err(error) => return Err(error),
-            }
-        }
+        DeviceLayout::Pioneer => blocker_of(pioneer_export::ensure_database_is_ours(
+            transport,
+            &base,
+            &req.previous_catalogue,
+        ))?,
+        DeviceLayout::Ipod => blocker_of(writable_ipod(transport, req).map(drop))?,
         DeviceLayout::M3u | DeviceLayout::FolderPerPlaylist => None,
     };
     Ok(SyncPlan {
@@ -296,6 +313,11 @@ pub fn sync(
         pioneer_export::ensure_artwork_is_ours(transport, &base, record, &artwork)
             .map_err(untouched)?;
     }
+    // Nor is an iPod Sustain cannot write, or whose library is not its own.
+    let ipod = match req.device.layout {
+        DeviceLayout::Ipod => Some(writable_ipod(transport, req).map_err(untouched)?),
+        DeviceLayout::M3u | DeviceLayout::FolderPerPlaylist | DeviceLayout::Pioneer => None,
+    };
     transport
         .cleanup_stale_temporary_files(&base, cancel)
         .map_err(|error| untouched(SyncError::io(base.as_str(), error)))?;
@@ -311,7 +333,7 @@ pub fn sync(
     let placements = layout::plan_placements(req).map_err(untouched)?;
     let diff = compute_diff(req, transport, &base, &placements).map_err(untouched)?;
 
-    let mut run = Run::new(req, &placements, &diff);
+    let mut run = Run::new(req, &placements, &diff, ipod);
     match run.execute(transport, &base, journal, progress, cancel) {
         Ok(()) => Ok(run.into_outcome()),
         Err(error) => Err(Box::new(SyncFailure {
@@ -348,13 +370,20 @@ struct Run<'a> {
     /// The playlist files the run wrote, and the stale ones it removed.
     playlists_written: Vec<DeviceRelativePath>,
     playlists_removed: HashSet<&'a DeviceRelativePath>,
-    /// The Pioneer database and artwork the device holds from Sustain,
+    /// The catalogue databases and artwork the device holds from Sustain,
     /// kept current as the run writes and removes them.
     catalogue: CatalogueRecord,
+    /// The iPod an iPod-layout run writes to.
+    ipod: Option<Ipod>,
 }
 
 impl<'a> Run<'a> {
-    fn new(req: &'a PreparedSyncRequest, placements: &'a [Placement], diff: &'a Diff) -> Self {
+    fn new(
+        req: &'a PreparedSyncRequest,
+        placements: &'a [Placement],
+        diff: &'a Diff,
+        ipod: Option<Ipod>,
+    ) -> Self {
         let previous_anlz = req
             .previous_manifest
             .iter()
@@ -388,6 +417,7 @@ impl<'a> Run<'a> {
             playlists_written: Vec::new(),
             playlists_removed: HashSet::new(),
             catalogue: req.previous_catalogue.clone(),
+            ipod,
         };
         // Unchanged files stay in the manifest as-is.
         for &index in &diff.unchanged {
@@ -489,12 +519,13 @@ impl<'a> Run<'a> {
             });
         }
 
-        // Index/database files. The Pioneer/m3u layouts rewrite these every
-        // run because the selection (not just the audio) may have changed.
+        // Index/database files. The Pioneer, iPod and m3u layouts rewrite
+        // these every run because the selection (not just the audio) may
+        // have changed.
         if layout::always_finalizes(req.device.layout) || self.written > 0 {
             let stage = match req.device.layout {
-                DeviceLayout::Pioneer => SyncStage::WritingDatabase,
-                _ => SyncStage::WritingPlaylists,
+                DeviceLayout::Pioneer | DeviceLayout::Ipod => SyncStage::WritingDatabase,
+                DeviceLayout::M3u | DeviceLayout::FolderPerPlaylist => SyncStage::WritingPlaylists,
             };
             progress(SyncProgress {
                 stage,
@@ -523,6 +554,21 @@ impl<'a> Run<'a> {
                     &mut self.catalogue,
                     journal,
                 )?,
+                DeviceLayout::Ipod => {
+                    let ipod = self.ipod.as_ref().ok_or_else(|| {
+                        SyncError::Preparation("the iPod was not identified".to_owned())
+                    })?;
+                    ipod_library::write_catalogue(
+                        req,
+                        transport,
+                        placements,
+                        &self.present,
+                        ipod,
+                        &mut self.catalogue,
+                        journal,
+                    )?;
+                    layout::Finalized::default()
+                }
             };
             for (entry, index) in self.manifest.iter_mut().zip(&self.entry_placements) {
                 if let Some(anlz) = finalized.anlz.remove(index) {

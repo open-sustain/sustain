@@ -238,7 +238,7 @@ impl DeviceSyncPanel {
                 id: device.id.clone(),
                 label: device.label.clone(),
                 kind: device.kind,
-                layout: DeviceLayout::M3u,
+                layout: DeviceLayout::default_for(device.kind),
                 sub_path: sustain_app_runtime::DeviceRelativePath::root(),
                 files_per_folder_cap: FilesPerFolderCap::Unlimited,
                 volume_id: device.volume_id.clone(),
@@ -287,7 +287,7 @@ impl DeviceSyncPanel {
         settings_column.append(&section_label(&gettext("On-drive format")));
         let format_group = gtk::Box::new(gtk::Orientation::Vertical, 2);
         let mut anchor: Option<gtk::CheckButton> = None;
-        for layout in DeviceLayout::ALL {
+        for &layout in DeviceLayout::offered_for(config.kind) {
             let radio = gtk::CheckButton::with_label(layout.label());
             match &anchor {
                 Some(first) => radio.set_group(Some(first)),
@@ -323,7 +323,7 @@ impl DeviceSyncPanel {
                 self.append_folder_cap(&settings_column, device, config.files_per_folder_cap)
             }
             DeviceLayout::Pioneer => self.append_pioneer_readiness(&settings_column, device),
-            DeviceLayout::M3u => {}
+            DeviceLayout::M3u | DeviceLayout::Ipod => {}
         }
         columns.append(&settings_column);
         self.body.append(&columns);

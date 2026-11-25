@@ -566,6 +566,7 @@ impl PlaylistSidebar {
                     let icon = match device.kind {
                         DeviceKind::Android => "phone-symbolic",
                         DeviceKind::UsbDrive => "drive-removable-media-symbolic",
+                        DeviceKind::Ipod => "multimedia-player-symbolic",
                     };
                     let row_parts = build_standalone_sidebar_row_parts(&device.label, icon);
                     let row = row_parts.row;
@@ -574,7 +575,7 @@ impl PlaylistSidebar {
                     self.transfer_badges
                         .borrow_mut()
                         .push((DeviceRowSubject::SyncTarget(device.id.clone()), sync_badge));
-                    if device.kind == DeviceKind::UsbDrive
+                    if matches!(device.kind, DeviceKind::UsbDrive | DeviceKind::Ipod)
                         && matches!(&device.target, DeviceTarget::Filesystem { .. })
                     {
                         let eject = sidebar_eject_button({

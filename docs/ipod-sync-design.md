@@ -38,8 +38,9 @@ without an iPod are not affected, by construction:
   tested both on a fresh database and on upgrades from every earlier version.
 
 "Beta" is an honest label, not a gate. The layout reads "iPod (beta)". Each
-model family in the profile table carries a `validated` flag, shown in the
-device panel and in `docs/features.md`. Every in-scope family is offered:
+model family in the profile table carries a `validated` flag, shown in
+`docs/features.md`; the device panel does not know the model, which is read
+only when the iPod is synced. Every in-scope family is offered:
 with no gate, an unoffered family could never be validated. The label is
 dropped once two different families have passed the hardware checklist (§10).
 
@@ -119,8 +120,11 @@ same facts.
   - the root is HFS+ or read-only;
   - the model is unknown or out of scope;
   - a hash58 model has no readable GUID;
-  - its `iTunesDB` or `ArtworkDB` matches no recorded identity and lists
-    tracks.
+  - its `iTunesDB` matches no recorded identity and lists tracks. Only the
+    `iTunesDB` decides: the `ArtworkDB` and the covers serve the library it
+    lists, so beside an empty or recorded catalogue they hold nothing to
+    keep. An unrecorded `iTunesDB` larger than 1 MiB counts as listing
+    tracks without being read, since an empty one is a few kilobytes.
 - **Write order**, which fits the engine's copy → finalize → remove sequence:
   1. Audio copies.
   2. `.ithmb` cover files, then `ArtworkDB`.
@@ -147,7 +151,7 @@ same facts.
 iPod needs:
 
 - `databases`: the size and SHA-256 of every catalogue file Sustain may have
-  left on the device, here `iTunesDB` and `ArtworkDB`;
+  left on the device, here the `iTunesDB`;
 - `artwork`: the cover files Sustain owns, for stale-file removal.
 
 It is renamed to a layout-neutral `CatalogueRecord`. Migration 27 renames its
@@ -197,9 +201,9 @@ text in `sync_blocker_text`:
   Restoring it erases it, recordings included, so they should be copied off
   first.
 
-Outcomes and failures go through `NotificationCenter`, as today. The layout
-labels are passed through gettext, and the strings are translated in every
-`po/*.po`.
+Outcomes and failures go through `NotificationCenter`, as today. The
+blocker texts are translated in every `po/*.po`. The layout labels are not
+translated yet, the iPod's no more than the others.
 
 ## 9. Testing
 

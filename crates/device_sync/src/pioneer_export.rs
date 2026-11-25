@@ -68,7 +68,7 @@ pub(crate) fn ensure_database_is_ours(
     let bytes = transport.read_file(&path, len).map_err(io_error)?;
     if record
         .databases
-        .contains(&sustain_pioneer::database_identity(&bytes))
+        .contains(&crate::catalogue::identity(&bytes))
     {
         Ok(())
     } else {

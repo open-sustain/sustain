@@ -75,8 +75,19 @@ pub struct SyncInputTrack {
     pub genre: Option<String>,
     pub composer: Option<String>,
     pub comment: Option<String>,
+    pub album_artist: Option<String>,
+    pub compilation: bool,
+    /// The "sort as" overrides of the title, artist, album, album artist
+    /// and composer.
+    pub sort_title: Option<String>,
+    pub sort_artist: Option<String>,
+    pub sort_album: Option<String>,
+    pub sort_album_artist: Option<String>,
+    pub sort_composer: Option<String>,
     pub track_number: Option<u32>,
+    pub track_total: Option<u32>,
     pub disc_number: Option<u32>,
+    pub disc_total: Option<u32>,
     pub year: Option<u32>,
     pub duration_ms: u32,
     /// 0 (unrated) through 5.
@@ -89,8 +100,9 @@ pub struct SyncInputTrack {
     /// rekordbox writes for them.
     pub bit_depth: u16,
     pub source: SourceSnapshot,
-    /// `YYYY-MM-DD` the track entered the library, for the Pioneer PDB.
-    pub date_added: Option<String>,
+    /// When the track entered the library, as seconds since the Unix
+    /// epoch.
+    pub date_added: Option<i64>,
     /// Lower-case file extension without the dot (e.g. `mp3`).
     pub extension: String,
 }
@@ -121,12 +133,14 @@ pub struct SyncRequest {
     /// relative to the sync base like the manifest's paths. A recorded
     /// file no playlist of this sync writes is stale; no other file is.
     pub previous_playlist_files: Vec<DeviceRelativePath>,
-    /// The database and artwork the previous syncs left in the device's
-    /// Pioneer export. Empty for other layouts.
+    /// The catalogue databases and artwork the previous syncs left on the
+    /// device: a Pioneer export's or an iPod library's. Empty for the
+    /// other layouts.
     pub previous_catalogue: CatalogueRecord,
     /// Delete on-device files no longer in the selection.
     pub remove_stale: bool,
-    /// `YYYY-MM-DD` stamped into the Pioneer analyze-date field.
+    /// `YYYY-MM-DD` stamped into the Pioneer analyze-date field (see
+    /// [`calendar_date`]).
     pub export_date: String,
 }
 
@@ -182,6 +196,23 @@ impl PreparedPioneerAssets {
     pub fn artwork_count(&self) -> usize {
         self.artwork.len()
     }
+}
+
+/// A Unix timestamp (seconds) as the `YYYY-MM-DD` the Pioneer database
+/// stamps, in UTC, without a date-library dependency (Howard Hinnant's civil-from-days algorithm).
+pub fn calendar_date(secs: i64) -> String {
+    let days = secs.div_euclid(86_400);
+    let z = days + 719_468;
+    let era = (if z >= 0 { z } else { z - 146_096 }) / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let year = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = if month <= 2 { year + 1 } else { year };
+    format!("{year:04}-{month:02}-{day:02}")
 }
 
 /// A sync request whose every source observation carries a SHA-256. Only this
@@ -302,6 +333,20 @@ pub enum SyncBlocker {
     /// `PIONEER/rekordbox` and `PIONEER/Artwork` folders first. The rest
     /// of `PIONEER`, the player's settings and profile, is not in the way.
     ForeignPioneerExport,
+    /// The iPod is formatted for a Mac (HFS+), which Linux cannot safely
+    /// write. Restoring it with iTunes for Windows formats it FAT32.
+    MacFormattedIpod,
+    /// The device is mounted read-only.
+    ReadOnlyDevice,
+    /// The iPod's model is unknown, or one Sustain does not support.
+    UnsupportedIpod,
+    /// The iPod's library must be signed with its serial number, and the
+    /// serial number could not be read.
+    UnidentifiedIpod,
+    /// The iPod holds a library Sustain did not write — iTunes' or
+    /// Finder's. Writing Sustain's would orphan its music; the user must
+    /// restore the iPod first, after copying off anything to keep.
+    ForeignIpodLibrary,
 }
 
 impl std::fmt::Display for SyncBlocker {
@@ -314,6 +359,20 @@ impl std::fmt::Display for SyncBlocker {
                      remove its PIONEER/rekordbox and PIONEER/Artwork folders to sync"
                 )
             }
+            Self::MacFormattedIpod => write!(
+                f,
+                "the iPod is formatted for a Mac; restore it with iTunes for Windows to sync"
+            ),
+            Self::ReadOnlyDevice => write!(f, "the device is mounted read-only"),
+            Self::UnsupportedIpod => write!(f, "this iPod model is not supported"),
+            Self::UnidentifiedIpod => write!(
+                f,
+                "the iPod's serial number, needed to sign its library, could not be read"
+            ),
+            Self::ForeignIpodLibrary => write!(
+                f,
+                "the iPod holds a library Sustain did not write; restore the iPod to sync"
+            ),
         }
     }
 }
@@ -352,8 +411,8 @@ pub struct SyncOutcome {
     pub manifest: Vec<SyncManifestEntry>,
     /// The playlist files the device holds from Sustain, to persist.
     pub playlist_files: Vec<DeviceRelativePath>,
-    /// The Pioneer database and artwork the device holds from Sustain, to
-    /// persist.
+    /// The catalogue databases and artwork the device holds from Sustain,
+    /// to persist.
     pub catalogue: CatalogueRecord,
     /// True if the run stopped early because cancellation was requested.
     pub cancelled: bool,
@@ -378,6 +437,8 @@ pub enum SyncError {
     },
     /// The Pioneer PDB could not be assembled.
     Pdb(sustain_pioneer::PdbError),
+    /// The iPod catalogue could not be assembled.
+    Ipod(sustain_ipod::WriteError),
     /// A change to the device could not be recorded in the journal.
     Journal(crate::journal::JournalError),
     /// Live source preparation failed before removable-media mutation.
@@ -414,6 +475,7 @@ impl std::fmt::Display for SyncError {
         match self {
             Self::Io { path, source } => write!(f, "{}: {source}", path.display()),
             Self::Pdb(error) => write!(f, "Pioneer database: {error}"),
+            Self::Ipod(error) => write!(f, "iPod library: {error}"),
             Self::Journal(error) => write!(f, "could not record the sync's progress: {error}"),
             Self::Preparation(message) => write!(f, "source preparation failed: {message}"),
             Self::Empty => write!(f, "the selection contains no tracks"),
@@ -428,6 +490,7 @@ impl std::error::Error for SyncError {
         match self {
             Self::Io { source, .. } => Some(source),
             Self::Pdb(error) => Some(error),
+            Self::Ipod(error) => Some(error),
             Self::Journal(error) => Some(error.as_ref()),
             Self::Empty | Self::Planning(_) | Self::Preparation(_) | Self::Blocked(_) => None,
         }
@@ -445,8 +508,8 @@ pub struct SyncFailure {
     /// The playlist files the device holds from Sustain, to persist: the
     /// previous record, less those the run removed, plus those it wrote.
     pub playlist_files: Vec<DeviceRelativePath>,
-    /// The Pioneer database and artwork the device holds from Sustain, to
-    /// persist, kept current as the run changed them.
+    /// The catalogue databases and artwork the device holds from Sustain,
+    /// to persist, kept current as the run changed them.
     pub catalogue: CatalogueRecord,
 }
 
@@ -459,5 +522,17 @@ impl std::fmt::Display for SyncFailure {
 impl std::error::Error for SyncFailure {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         Some(&self.error)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::calendar_date;
+
+    #[test]
+    fn formats_known_dates() {
+        assert_eq!(calendar_date(0), "1970-01-01");
+        assert_eq!(calendar_date(1_700_000_000), "2023-11-14");
+        assert_eq!(calendar_date(1_780_012_800), "2026-05-29");
     }
 }

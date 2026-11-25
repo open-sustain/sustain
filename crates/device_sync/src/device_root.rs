@@ -22,8 +22,8 @@ use std::{
 
 use rustix::{
     fs::{
-        AtFlags, FileType, Mode, OFlags, RawDir, fstat, fstatvfs, fsync, mkdirat, open, openat,
-        renameat, statat, unlinkat,
+        AtFlags, FileType, Mode, OFlags, RawDir, StatVfsMountFlags, fstat, fstatfs, fstatvfs,
+        fsync, major, minor, mkdirat, open, openat, renameat, statat, unlinkat,
     },
     io::{Errno, dup},
 };
@@ -32,8 +32,11 @@ use sustain_domain::{DeviceRelativePath, SourceFileStat};
 use crate::{
     model::DeviceCapacity,
     source::ensure_source_unchanged,
-    transport::{DeviceTransport, DirectoryWorkBudget},
+    transport::{DeviceTransport, DirectoryWorkBudget, VolumeFacts},
 };
+
+/// The kernel's magic number for HFS+ (`HFSPLUS_SUPER_MAGIC`).
+const HFSPLUS_SUPER_MAGIC: i128 = 0x482b;
 
 const DIRECTORY_MODE: Mode = Mode::RUSR
     .union(Mode::WUSR)
@@ -86,8 +89,25 @@ impl DeviceRoot {
         })
     }
 
+    pub(crate) fn volume_facts(&self) -> io::Result<VolumeFacts> {
+        let filesystem = fstatfs(&self.fd).map_err(io::Error::from)?;
+        let mount = fstatvfs(&self.fd).map_err(io::Error::from)?;
+        let device = fstat(&self.fd).map_err(io::Error::from)?.st_dev;
+        Ok(VolumeFacts {
+            hfs_plus: i128::from(filesystem.f_type) == HFSPLUS_SUPER_MAGIC,
+            read_only: mount.f_flag.contains(StatVfsMountFlags::RDONLY),
+            usb_serial: usb_serial(major(device), minor(device)),
+        })
+    }
+
     pub(crate) fn is_regular_file(&self, path: &DeviceRelativePath) -> io::Result<bool> {
         self.regular_file_len(path).map(|len| len.is_some())
+    }
+
+    /// Whether `path` opens as a directory, not through a link. Any
+    /// failure to open it counts as no.
+    pub(crate) fn is_directory(&self, path: &DeviceRelativePath) -> bool {
+        self.open_dir(path, false).is_ok()
     }
 
     pub(crate) fn regular_file_len(&self, path: &DeviceRelativePath) -> io::Result<Option<u64>> {
@@ -348,6 +368,10 @@ impl DeviceTransport for DeviceRoot {
         self.capacity()
     }
 
+    fn volume_facts(&self) -> io::Result<VolumeFacts> {
+        self.volume_facts()
+    }
+
     fn ensure_dir_all(&self, path: &DeviceRelativePath) -> io::Result<()> {
         self.ensure_dir_all(path)
     }
@@ -400,6 +424,21 @@ impl DeviceTransport for DeviceRoot {
     ) -> io::Result<()> {
         self.cleanup_stale_temporary_files(path, cancel)
     }
+}
+
+/// The serial number of the USB device holding block device
+/// `major:minor`: the `serial` of the nearest USB device (one with an
+/// `idVendor`) above it in sysfs. `None` for a filesystem on no USB device,
+/// or on one sysfs does not describe.
+fn usb_serial(major: u32, minor: u32) -> Option<String> {
+    let block = std::fs::canonicalize(format!("/sys/dev/block/{major}:{minor}")).ok()?;
+    block
+        .ancestors()
+        .take_while(|path| path.starts_with("/sys/devices"))
+        .find(|path| path.join("idVendor").is_file())
+        .and_then(|usb| std::fs::read_to_string(usb.join("serial")).ok())
+        .map(|serial| serial.trim().to_owned())
+        .filter(|serial| !serial.is_empty())
 }
 
 fn split_parent(path: &DeviceRelativePath) -> io::Result<(DeviceRelativePath, &str)> {
@@ -638,6 +677,16 @@ mod tests {
 
         assert!(capacity.total_bytes > 0);
         assert!(capacity.available_bytes <= capacity.total_bytes);
+    }
+
+    #[test]
+    fn volume_facts_are_read_from_the_opened_root() {
+        let device = tempfile::tempdir().expect("device dir");
+        let root = DeviceRoot::open(device.path()).expect("root");
+
+        let facts = root.volume_facts().expect("volume facts");
+
+        assert!(!facts.hfs_plus && !facts.read_only);
     }
 
     #[cfg(unix)]

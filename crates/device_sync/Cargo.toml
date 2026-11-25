@@ -16,10 +16,14 @@ path = "src/lib.rs"
 sustain-domain = { path = "../domain" }
 # Pioneer on-drive writer for the Pioneer layout.
 sustain-pioneer = { path = "../pioneer" }
+# iPod catalogue, covers and model table for the iPod layout.
+sustain-ipod = { path = "../ipod" }
 # Root-confined removable-media writes: safe openat/mkdirat/renameat/unlinkat
 # wrappers let the sync engine anchor every operation to one mount-root fd.
 rustix = { version = "1.1.4", features = ["fs"] }
-# Stable source-content fingerprints for incremental export manifests.
+# Stable source-content fingerprints for incremental export manifests, the
+# identity of the catalogue databases Sustain leaves on a device, and the
+# iPod library's persistent ids.
 sha2 = "0.11.0"
 
 [dev-dependencies]

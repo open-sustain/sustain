@@ -10,7 +10,7 @@
 //! path is never used as identity — it is unstable across sessions.
 //!
 //! Discovery here enumerates mounted removable block devices (USB sticks,
-//! SD cards) from `/proc/mounts`. Android phones are not block mounts;
+//! SD cards, iPods) from `/proc/mounts`. Android phones are not block mounts;
 //! their MTP discovery lives in the `device_mtp` crate and is merged in by
 //! the runtime. Nothing here blocks on slow hardware, and callers run it
 //! lazily (never at startup).
@@ -190,6 +190,16 @@ fn volume_id_for_device(device: &Path) -> Option<String> {
     None
 }
 
+/// The folder whose presence at a volume's root makes it an iPod.
+const IPOD_CONTROL_DIR: &str = "iPod_Control";
+
+/// Whether the volume at `root` is an iPod in disk mode. One cheap check,
+/// fit for the GTK thread: everything else about the iPod is read when it
+/// is synced.
+fn is_ipod(root: &DeviceRoot) -> bool {
+    root.is_directory(&DeviceRelativePath::new(IPOD_CONTROL_DIR).expect("static iPod path is safe"))
+}
+
 /// Discover connected devices, resolving each against `known` config.
 ///
 /// Recognition order per mount: marker file, then volume-id fallback,
@@ -203,7 +213,15 @@ pub fn discover(known: &[SyncDevice]) -> Vec<ConnectedDevice> {
             |name| name.to_string_lossy().into_owned(),
         );
 
-        let marker = read_marker(&mount.mount_point);
+        let root = DeviceRoot::open(&mount.mount_point).ok();
+        let marker = root
+            .as_ref()
+            .and_then(|root| read_marker_via_transport(root));
+        let kind = if root.as_ref().is_some_and(is_ipod) {
+            DeviceKind::Ipod
+        } else {
+            DeviceKind::UsbDrive
+        };
         let (id, is_known, has_marker) = if let Some(id) = marker {
             let known_match = known.iter().any(|d| d.id == id);
             (id, known_match, true)
@@ -229,7 +247,7 @@ pub fn discover(known: &[SyncDevice]) -> Vec<ConnectedDevice> {
 
         devices.push(ConnectedDevice {
             id,
-            kind: DeviceKind::UsbDrive,
+            kind,
             target: DeviceTarget::Filesystem {
                 mount_path: mount.mount_point,
             },
@@ -270,6 +288,18 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         fs::create_dir(dir.path().join(MARKER_FILE)).expect("create marker directory");
         assert_eq!(read_marker(dir.path()), None);
+    }
+
+    #[test]
+    fn a_volume_is_an_ipod_when_its_root_holds_ipod_control() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = DeviceRoot::open(dir.path()).expect("open root");
+        assert!(!is_ipod(&root));
+        fs::write(dir.path().join(IPOD_CONTROL_DIR), b"").expect("write file");
+        assert!(!is_ipod(&root), "a file of that name is not the folder");
+        fs::remove_file(dir.path().join(IPOD_CONTROL_DIR)).expect("remove file");
+        fs::create_dir(dir.path().join(IPOD_CONTROL_DIR)).expect("create folder");
+        assert!(is_ipod(&root));
     }
 
     #[test]

@@ -54,19 +54,6 @@ pub const FOREIGN_CATALOG_RELATIVE_PATHS: [&str; 2] = [
     "PIONEER/rekordbox/exportLibrary.db",
 ];
 
-/// The exact track database `bytes` make: what identifies the database a
-/// writer left on a drive.
-pub fn database_identity(bytes: &[u8]) -> sustain_domain::CatalogueDatabase {
-    use sha2::{Digest, Sha256};
-    sustain_domain::CatalogueDatabase {
-        size_bytes: u64::try_from(bytes.len()).expect("a byte length fits in u64"),
-        sha256: Sha256::digest(bytes)
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect(),
-    }
-}
-
 /// Root directory of the audio files on the drive (each track stored
 /// once under `Contents/Artist/Album/`).
 pub const CONTENTS_DIR: &str = "Contents";

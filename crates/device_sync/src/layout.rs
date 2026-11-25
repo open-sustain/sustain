@@ -15,6 +15,9 @@
 //!   subfolder splits.
 //! - **Pioneer** — a deduplicated `Contents/Artist/Album` tree plus the
 //!   `export.pdb` database and per-track ANLZ waveform files.
+//! - **Ipod** — audio named after each track's id under
+//!   `iPod_Control/Music`, plus the `iTunesDB` catalogue (see
+//!   [`crate::ipod_library`]).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
@@ -25,9 +28,11 @@ use sustain_pioneer::{
     AnlzInput, PioneerFileType, PioneerPlaylist, PioneerTrack, anlz, device_setting, path_hash, pdb,
 };
 
+use crate::ipod_library;
 use crate::journal::ManifestJournal;
 use crate::model::{
     Placement, PreparedSyncRequest, SyncError, SyncInputPlaylist, SyncInputTrack, SyncRequest,
+    calendar_date,
 };
 use crate::pioneer_export;
 use crate::transport::DeviceTransport;
@@ -57,6 +62,7 @@ pub fn plan_placements(req: &SyncRequest) -> Result<Vec<Placement>, SyncError> {
         DeviceLayout::M3u => tree_placements(req, MUSIC_DIR)?,
         DeviceLayout::Pioneer => tree_placements(req, CONTENTS_DIR)?,
         DeviceLayout::FolderPerPlaylist => folder_placements(req)?,
+        DeviceLayout::Ipod => ipod_library::placements(req)?,
     };
     placements.retain(|placement| plays(req.device.layout, &req.tracks[placement.track_index]));
     validate_unique(&placements)?;
@@ -64,14 +70,16 @@ pub fn plan_placements(req: &SyncRequest) -> Result<Vec<Placement>, SyncError> {
 }
 
 /// Whether the player a layout targets can play `track`. Pioneer players
-/// read only the formats rekordbox exports; anything else would sit in
-/// the player's browser and refuse to load. The other layouts feed
-/// players Sustain knows nothing about, so every track goes.
+/// read only the formats rekordbox exports, and an iPod only its own;
+/// anything else would sit in the player's browser and refuse to load.
+/// The other layouts feed players Sustain knows nothing about, so every
+/// track goes.
 pub(crate) fn plays(layout: DeviceLayout, track: &SyncInputTrack) -> bool {
     match layout {
         DeviceLayout::Pioneer => {
             PioneerFileType::from_extension(&track.extension) != PioneerFileType::Unknown
         }
+        DeviceLayout::Ipod => ipod_library::plays(track),
         DeviceLayout::M3u | DeviceLayout::FolderPerPlaylist => true,
     }
 }
@@ -162,7 +170,10 @@ pub(crate) struct Finalized {
 /// True when the layout writes its index/database files after the audio
 /// even if no audio changed (the selection itself may have changed).
 pub fn always_finalizes(layout: DeviceLayout) -> bool {
-    matches!(layout, DeviceLayout::M3u | DeviceLayout::Pioneer)
+    matches!(
+        layout,
+        DeviceLayout::M3u | DeviceLayout::Pioneer | DeviceLayout::Ipod
+    )
 }
 
 // ---------------------------------------------------------------------
@@ -574,7 +585,7 @@ pub(crate) fn write_pioneer(
             bit_depth: track.bit_depth,
             file_type: PioneerFileType::from_extension(&track.extension),
             artwork_id: track_assets.artwork_id,
-            date_added: track.date_added.clone(),
+            date_added: track.date_added.map(calendar_date),
             device_audio_path: audio_path.clone(),
             device_anlz_path: slot.dat_path(),
         });
@@ -636,7 +647,7 @@ pub(crate) fn write_pioneer(
     .map_err(SyncError::Pdb)?;
     // Until the new database is known to be published, either it or the
     // one it replaces may be what the drive holds.
-    let database = sustain_pioneer::database_identity(&bytes);
+    let database = crate::catalogue::identity(&bytes);
     record.databases.insert(database.clone());
     journal
         .record_catalogue(record)

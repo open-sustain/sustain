@@ -1168,6 +1168,28 @@ pub fn sync_blocker_text(blocker: sustain_device_sync::SyncBlocker) -> String {
              changed since. Syncing would erase it: remove the drive's PIONEER/rekordbox \
              and PIONEER/Artwork folders to sync. The player's settings beside them can stay.",
         ),
+        sustain_device_sync::SyncBlocker::MacFormattedIpod => gettext(
+            "This iPod is formatted for a Mac, and Linux cannot write to it safely. To sync \
+             it, restore it with iTunes for Windows, which formats it for Windows. Restoring \
+             erases the iPod: copy off anything you want to keep first.",
+        ),
+        sustain_device_sync::SyncBlocker::ReadOnlyDevice => gettext(
+            "This device is mounted read-only, so nothing can be written to it. Unplug it and \
+             plug it back in; if it stays read-only, check its filesystem for errors.",
+        ),
+        sustain_device_sync::SyncBlocker::UnsupportedIpod => gettext(
+            "Sustain does not support this iPod model. It syncs the iPod classic and the \
+             earlier iPods, the iPod mini, and the iPod nano up to the 4th generation.",
+        ),
+        sustain_device_sync::SyncBlocker::UnidentifiedIpod => gettext(
+            "Sustain could not read this iPod's serial number, which it needs to sign the \
+             iPod's library. Unplug the iPod, plug it back in, and try again.",
+        ),
+        sustain_device_sync::SyncBlocker::ForeignIpodLibrary => gettext(
+            "This iPod holds a library from iTunes or Finder, which syncing would erase. To \
+             sync it with Sustain, restore it with iTunes first. Restoring erases everything \
+             on the iPod, voice memos and recordings included, so copy those off first.",
+        ),
     }
 }
 
