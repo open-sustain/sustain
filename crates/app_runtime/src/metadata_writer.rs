@@ -1157,12 +1157,10 @@ mod tests {
             recv_result(&result_rx, Duration::from_secs(2)).outcome,
             MetadataWriteOutcome::Failed
         );
-        assert_eq!(
-            store.tag_mirrors_due(i64::MAX, 10).expect("pending").len(),
-            1
-        );
-        // The retry is due a wall-clock second or two after the failure;
-        // the bound only has to outlast that on a loaded machine.
+        // The failure leaves the durable row pending: only it brings the
+        // retry, due within a wall-clock second or two. Counting the row
+        // here would race that retry; the bound only has to outlast it on
+        // a loaded machine.
         assert_eq!(
             recv_result(&result_rx, Duration::from_secs(10)).outcome,
             MetadataWriteOutcome::Succeeded
