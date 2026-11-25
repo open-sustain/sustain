@@ -25,6 +25,15 @@ Used as a reference, not as a source:
 - **Model table** (`src/itdb_device.c`, `ipod_info_table`): which model
   number belongs to which generation, and which generations need hash58 or a
   media type. `src/profile.rs` lists the in-scope rows, with only the family.
+- **Artwork** (`src/db-artwork-writer.c`, `src/ithumb-writer.c`,
+  `src/db-itunes-parser.h`, and in `src/itdb_device.c` the cover-format
+  tables and `itdb_device_supports_sparse_artwork`): the `ArtworkDB` record
+  layout and header sizes, the `F{format}_{n}.ithmb` naming, image ids from
+  100, which families share images between tracks, and the track record's
+  artwork fields (`src/itdb_track.c`). `src/artwork.rs` follows them, with
+  two departures: the classic's F1061 format is 55 × 55 in 112-byte rows
+  (see below), not libgpod's 56 × 56; and each `.ithmb` file stops at
+  32 MiB rather than 256 MB, because Sustain renders a whole file in memory.
 - **hash58** (`src/itdb_hash58.c`): the procedure — the GUID's pairwise least
   common multiples, the S-box mixing, the 18-byte seed, the HMAC-SHA1 over
   the normalised file. `src/hash58.rs` implements it from that description;
@@ -60,7 +69,29 @@ albums and artists, the hash-table order it writes them in, and the creation
 time it stamps on playlists. libgpod does not check signatures, so this
 checks structure only.
 
+## Artwork cross-check (developer tool, not CI)
+
+During development, a classic 120 GB and an iPod with video library, each
+with three covers (one shared by two tracks, one wider than tall), were
+written with `src/artwork.rs` and read by libgpod's own `itdb_parse` and
+`itdb_track_get_thumbnail`. libgpod found every cover in every format, at
+the stated size, with the expected colours, and the decoded images were
+neither skewed nor shifted, which checks the 112-byte F1061 rows. On the
+iPod with video, where each track has its own image, the two images of
+the shared cover pointed at one copy of the pixels.
+
 ## Other references
+
+- iOpenPod's firmware research, revision `5e48bd7`
+  (https://github.com/TheRealSavi/iOpenPod, `docs/research/`):
+  `f1061-native-geometry.md` for F1061's 55 × 55 pixels in 112-byte rows
+  on classic and nano 3G firmware, and
+  `classic201-artwork-semantics-2026-10-28.md` for the classic looking a
+  track's cover up by the image id in its record. Facts only; no code.
+- The cover formats an iTunes-written classic catalogue uses (F1055, F1060,
+  F1061), from Omatune's scrubbed classic 120 GB fixture
+  (https://github.com/jyooi/omatune, `fixtures/device/CLASSIC_2`), as
+  surveyed on #391.
 
 - The iPodLinux *iTunesDB* documentation, via
   https://github.com/raleighlittles/iTunesDB-Parser (`itunesdb_docs/`), for

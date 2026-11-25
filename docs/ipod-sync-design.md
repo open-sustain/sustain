@@ -167,8 +167,15 @@ the point of `PreparedSyncRequest`. Covers therefore follow
   profile's largest format edge (320 px on a Classic), and keeps it as a
   compact JPEG, roughly 40 KB.
 - The engine renders the RGB565 for each format from those prepared covers,
-  one `.ithmb` file at a time. Each file is capped well below libgpod's
-  256 MB limit, so memory holds at most one file.
+  one `.ithmb` file at a time. Each file is capped at 32 MiB, well below
+  libgpod's 256 MB limit, so memory holds at most one file.
+- On the classic and nano 3G/4G, tracks that share a cover share one image.
+  Older firmwares look a cover up by its track, so each track has its own
+  image record, but all of them point at the cover's single copy of the
+  pixels.
+- A classic gets the three formats an iTunes-written classic catalogue
+  uses: F1061, F1055 and F1060. F1068, which libgpod also writes, belongs
+  to another media association.
 - All artwork is rewritten on every sync, as Pioneer does. If hardware timings
   show this hurts, one recorded digest of the cover set can skip it,
   following the `AnlzRecord` precedent.

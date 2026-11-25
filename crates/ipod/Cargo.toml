@@ -19,6 +19,13 @@ sustain-domain = { path = "../domain" }
 # HMAC-SHA1. RustCrypto, the family of the `sha2` already in the workspace.
 sha1 = "0.11.0"
 hmac = "0.13.0"
+# Album covers: the same bounded decode of embedded art the Pioneer export
+# uses, then a square JPEG per distinct cover until the RGB565 `.ithmb`
+# files are rendered from it. Only exercised during a background sync.
+sustain-artwork = { path = "../artwork" }
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
+# De-duplicates identical covers, as for Pioneer.
+sha2 = "0.11.0"
 
 [lints]
 workspace = true

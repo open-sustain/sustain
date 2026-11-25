@@ -220,6 +220,7 @@ mod tests {
             bitrate_kbps: None,
             sample_rate_hz: 44_100,
             date_added: None,
+            cover: None,
         }
     }
 

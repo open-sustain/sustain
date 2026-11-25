@@ -40,6 +40,7 @@ fn track(dbid: u64, title: &str, artist: &str, album: &str) -> IpodTrack {
         bitrate_kbps: Some(320),
         sample_rate_hz: 44_100,
         date_added: Some(1_700_000_000),
+        cover: None,
     }
 }
 

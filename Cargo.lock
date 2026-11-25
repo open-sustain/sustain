@@ -2211,7 +2211,10 @@ name = "sustain-ipod"
 version = "0.10.2"
 dependencies = [
  "hmac",
+ "image",
  "sha1",
+ "sha2",
+ "sustain-artwork",
  "sustain-domain",
 ]
 

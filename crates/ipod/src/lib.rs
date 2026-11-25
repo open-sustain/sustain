@@ -11,21 +11,28 @@
 //! tells which iPod needs what. Pure format code like `sustain-pioneer`:
 //! flat inputs in, bytes out, no I/O, no library model, no transport.
 //!
+//! The album covers the firmware shows live beside it, in
+//! `iPod_Control/Artwork` ([`artwork`]).
+//!
 //! The byte layout follows libgpod's writer, the most widely deployed
 //! third-party producer of these files; `PROVENANCE.md` records the
 //! sources and what each module owes them. See `docs/ipod-sync-design.md`
 //! for how the sync engine drives this crate.
 
+pub mod artwork;
 pub mod hash58;
 pub mod itunesdb;
 pub mod model;
 pub mod profile;
+mod record;
 mod sort;
 
+pub use artwork::{CoverId, CoverSet, RenderError, Shard};
 pub use hash58::FirewireGuid;
-pub use itunesdb::{WriteError, track_count, write};
+pub use itunesdb::{track_count, write};
 pub use model::{FileType, IpodLibrary, IpodPlaylist, IpodTrack};
-pub use profile::{Checksum, Family, Profile, SysInfo};
+pub use profile::{Checksum, CoverFormat, Family, Profile, SysInfo};
+pub use record::WriteError;
 
 /// Where the catalogue lives, relative to the iPod's root.
 pub const ITUNESDB_RELATIVE_PATH: &str = "iPod_Control/iTunes/iTunesDB";

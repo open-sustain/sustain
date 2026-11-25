@@ -25,9 +25,11 @@
 
 use std::collections::{HashMap, HashSet};
 
+use crate::artwork::Images;
 use crate::hash58::{self, FirewireGuid};
 use crate::model::{FileType, IpodLibrary, IpodPlaylist, IpodTrack};
 use crate::profile::{Checksum, Profile};
+use crate::record::{Header, Open, Out, WriteError, u32_len};
 use crate::sort::{BrowseIndexes, Menu};
 
 /// The catalogue format version: iTunes 9.2's, the one libgpod writes.
@@ -62,49 +64,6 @@ const ALBUM_LIST_ARTIST: u32 = 201;
 const ALBUM_LIST_SORT_ARTIST: u32 = 202;
 const ARTIST_LIST_ARTIST: u32 = 300;
 
-/// Why a catalogue could not be written.
-#[derive(Debug, Eq, PartialEq)]
-pub enum WriteError {
-    /// The catalogue would exceed the 4 GiB its 32-bit lengths can address.
-    TooLarge,
-    /// A track's persistent id is zero or not unique.
-    InvalidTrackId { dbid: u64 },
-    /// A playlist's persistent id is zero or not unique.
-    InvalidPlaylistId { id: u64 },
-    /// A playlist names a track the library does not hold.
-    UnknownTrack { playlist: String, index: usize },
-    /// The device needs a hash58 signature and no GUID was given.
-    MissingFirewireGuid,
-}
-
-impl std::fmt::Display for WriteError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::TooLarge => write!(f, "the iPod catalogue would exceed 4 GiB"),
-            Self::InvalidTrackId { dbid } => {
-                write!(f, "track id {dbid:#x} is zero or used twice")
-            }
-            Self::InvalidPlaylistId { id } => {
-                write!(f, "playlist id {id:#x} is zero or used twice")
-            }
-            Self::UnknownTrack { playlist, index } => {
-                write!(
-                    f,
-                    "playlist {playlist:?} names track {index}, which is not in the library"
-                )
-            }
-            Self::MissingFirewireGuid => {
-                write!(
-                    f,
-                    "the iPod's FireWire GUID is needed to sign its catalogue"
-                )
-            }
-        }
-    }
-}
-
-impl std::error::Error for WriteError {}
-
 /// Write `library` as the catalogue of a device with `profile`, signed when
 /// the profile requires it (`guid` must then be given).
 pub fn write(
@@ -118,9 +77,10 @@ pub fn write(
         Checksum::Hash58 => Some(guid.ok_or(WriteError::MissingFirewireGuid)?),
     };
     let groups = Groups::new(&library.tracks);
+    let images = Images::new(&library.tracks, profile)?;
     let mut out = Out::default();
     let root = out.open_record(&mhbd_header(library));
-    write_tracks(&mut out, library, &groups, profile)?;
+    write_tracks(&mut out, library, &groups, &images.track_links, profile)?;
     write_playlists(&mut out, library, 3)?;
     write_playlists(&mut out, library, 2)?;
     write_albums(&mut out, library, &groups)?;
@@ -177,83 +137,6 @@ fn validate(library: &IpodLibrary) -> Result<(), WriteError> {
 // ---------------------------------------------------------------------
 // Records
 // ---------------------------------------------------------------------
-
-/// The output buffer. A record's total length is known only once its
-/// children are written: [`Out::open_record`] remembers where it starts and
-/// [`Out::close_record`] fills the length in.
-#[derive(Default)]
-struct Out {
-    bytes: Vec<u8>,
-}
-
-/// Where an open record starts.
-#[derive(Clone, Copy)]
-struct Open(usize);
-
-impl Out {
-    fn open_record(&mut self, header: &[u8]) -> Open {
-        let start = self.bytes.len();
-        self.bytes.extend_from_slice(header);
-        Open(start)
-    }
-
-    /// Fill in the total length, at `+8`, of the record opened at `open`.
-    fn close_record(&mut self, open: Open) -> Result<(), WriteError> {
-        let length = u32_len(self.bytes.len() - open.0)?;
-        self.bytes[open.0 + 8..open.0 + 12].copy_from_slice(&length.to_le_bytes());
-        Ok(())
-    }
-
-    /// Set a 32-bit field of the record opened at `open`.
-    fn set_u32(&mut self, open: Open, offset: usize, value: u32) {
-        self.bytes[open.0 + offset..open.0 + offset + 4].copy_from_slice(&value.to_le_bytes());
-    }
-
-    fn extend(&mut self, bytes: &[u8]) {
-        self.bytes.extend_from_slice(bytes);
-    }
-}
-
-fn u32_len(length: usize) -> Result<u32, WriteError> {
-    u32::try_from(length).map_err(|_| WriteError::TooLarge)
-}
-
-/// A record header of `length` bytes with its tag and header length set.
-struct Header(Vec<u8>);
-
-impl Header {
-    fn new(tag: &[u8; 4], length: u32) -> Self {
-        let mut bytes = vec![0u8; length as usize];
-        bytes[..4].copy_from_slice(tag);
-        bytes[4..8].copy_from_slice(&length.to_le_bytes());
-        Self(bytes)
-    }
-
-    fn u8(&mut self, offset: usize, value: u8) -> &mut Self {
-        self.0[offset] = value;
-        self
-    }
-
-    fn u16(&mut self, offset: usize, value: u16) -> &mut Self {
-        self.0[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
-        self
-    }
-
-    fn u32(&mut self, offset: usize, value: u32) -> &mut Self {
-        self.0[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
-        self
-    }
-
-    fn u64(&mut self, offset: usize, value: u64) -> &mut Self {
-        self.0[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
-        self
-    }
-
-    fn bytes(&mut self, offset: usize, value: &[u8]) -> &mut Self {
-        self.0[offset..offset + value.len()].copy_from_slice(value);
-        self
-    }
-}
 
 fn mhbd_header(library: &IpodLibrary) -> Vec<u8> {
     let mut header = Header::new(b"mhbd", 0xf4);
@@ -447,12 +330,19 @@ fn write_tracks(
     out: &mut Out,
     library: &IpodLibrary,
     groups: &Groups,
+    image_links: &[u32],
     profile: Profile,
 ) -> Result<(), WriteError> {
     let dataset = open_dataset(out, 1);
     out.extend(&list_header(b"mhlt", library.tracks.len())?);
     for (index, track) in library.tracks.iter().enumerate() {
-        let record = out.open_record(&mhit_header(track, index, groups, profile));
+        let record = out.open_record(&mhit_header(
+            track,
+            index,
+            groups,
+            image_links[index],
+            profile,
+        ));
         let path = device_path(&track.location);
         let count = write_text_records(
             out,
@@ -504,7 +394,13 @@ fn mac_time(unix: Option<i64>) -> u32 {
         .unwrap_or(0)
 }
 
-fn mhit_header(track: &IpodTrack, index: usize, groups: &Groups, profile: Profile) -> Vec<u8> {
+fn mhit_header(
+    track: &IpodTrack,
+    index: usize,
+    groups: &Groups,
+    image_link: u32,
+    profile: Profile,
+) -> Vec<u8> {
     let (type1, type2, unk126, unk144): (u8, u8, u16, u16) = match track.file_type {
         // The two type bytes are as iTunes writes them for a constant
         // bitrate MP3 (0, 1) and for MPEG-4 audio (0, 0); it sets the
@@ -551,6 +447,15 @@ fn mhit_header(track: &IpodTrack, index: usize, groups: &Groups, profile: Profil
         .u32(0x168, 1)
         .u32(0x1e0, groups.track_artist[index])
         .u32(0x1f4, groups.track_composer[index]);
+    if let Some(cover) = track.cover.filter(|_| image_link != 0) {
+        // One cover, the size of the image it came from, "has artwork",
+        // and the image the firmware looks it up by.
+        header
+            .u16(0x7c, 1)
+            .u32(0x80, cover.source_bytes())
+            .u8(0xa4, 1)
+            .u32(0x160, image_link);
+    }
     header.0
 }
 

@@ -6,6 +6,8 @@
 //! The caller translates its library into these plain values; the writer
 //! never sees a library model, a path on the host, or a transport.
 
+use crate::artwork::CoverId;
+
 /// The audio container of a track, as the catalogue files it. The
 /// catalogue tells formats apart by file extension; the iPod finds the
 /// codec in the file itself when it plays it, so AAC and Apple Lossless —
@@ -91,6 +93,8 @@ pub struct IpodTrack {
     pub sample_rate_hz: u16,
     /// When the track entered the library, as seconds since the Unix epoch.
     pub date_added: Option<i64>,
+    /// The track's cover, registered in the sync's [`CoverSet`](crate::CoverSet).
+    pub cover: Option<CoverId>,
 }
 
 /// One playlist: a name, a persistent id, and its tracks as indices into
