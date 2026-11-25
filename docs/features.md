@@ -1340,8 +1340,8 @@ MPRIS and work globally without focus.
 
 ## Device sync — *Sustain-native*
 
-A **DEVICES** section in the sidebar lists connected USB sticks, SD cards, and
-Android phones (over MTP). Selecting one opens its sync panel in the main content
+A **DEVICES** section in the sidebar lists connected USB sticks, SD cards,
+classic iPods, and Android phones (over MTP). Selecting one opens its sync panel in the main content
 column: tick-lists of playlists, smart playlists, and artists to send to the
 device, the on-drive format, and a Sync button. An artist the library spells
 several ways (`Daft Punk`, `DAFT PUNK`) is listed once and sends the tracks of
@@ -1387,7 +1387,7 @@ derived from the system accent, everything past the top eight folds into a singl
 grey "other" segment, and hovering a segment pops up its genre and size. The meter
 turns red when the selection would not fit.
 
-Three on-drive formats, chosen per device:
+Four on-drive formats, chosen per device:
 
 - **Playlists as `.m3u8`** — one deduplicated `Music/Artist/Album/NN Title.ext`
   tree plus one UTF-8 `.m3u8` per selected playlist, smart playlist, or artist.
@@ -1446,6 +1446,29 @@ Three on-drive formats, chosen per device:
   panel checks again when the user returns to Sustain's window. Artwork
   files Sustain did not write are likewise never deleted. A sync cut short —
   even by a crash — still leaves its own export recognised as Sustain's.
+- **iPod (beta)** — *iTunes-adjacent* — the library a classic iPod's stock
+  firmware reads, written the way iTunes wrote it: audio under
+  `iPod_Control/Music/`, the `iTunesDB` catalogue with its browse indexes
+  and letter-jump tables, so Artists, Albums, Songs, Genres and the selected
+  playlists appear in the iPod's own menus, and album covers in every size
+  the model shows. Offered only for a drive whose root holds an
+  `iPod_Control` folder, which Sustain discovers as an iPod (with its own
+  sidebar icon); such a drive starts on this format, and can use the two
+  others instead (Rockbox reads `.m3u8` playlists). Models: iPod 1G–5G,
+  iPod mini, iPod nano 1G–4G, and every iPod classic; the classic and nano
+  3G/4G libraries are signed with the device's serial number as their
+  firmware requires. Only formats the iPod plays go: MP3, AAC/ALAC (M4A),
+  WAV and AIFF up to 48 kHz; the sync summary counts the rest. Each track's
+  file is named after its library id, so a tag edit rewrites only the
+  catalogue, and play counts or ratings recorded on the iPod are discarded
+  when a new catalogue is written (they would otherwise land on the wrong
+  tracks). Sustain only writes over a library it wrote itself, or over an
+  empty one — a freshly restored iPod. The Sync button is greyed out, with
+  a note saying what to do, for an iPod formatted for Mac (restore it with
+  iTunes for Windows), one mounted read-only, an unsupported model, a
+  classic whose serial number cannot be read, and an iPod holding an
+  iTunes or Finder library. Labelled beta until it has been checked on real
+  hardware of two model families; no family has been yet.
 
 Android phones are reached over **MTP** through the desktop's GVfs backend — the
 same path the file manager uses, so no special drivers or root access are needed.

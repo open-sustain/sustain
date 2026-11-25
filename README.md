@@ -86,6 +86,7 @@ See [docs/features.md](docs/features.md) for the full reference.
 - Background backfill of missing artwork, tags, and lyrics via MusicBrainz, Cover Art Archive, Deezer, the iTunes Search API, and LRClib (*iTunes-adjacent*)
 - Smart Shuffle that picks each next track as a continuation of the one playing: a local, transparent perceptual match, no cloud, no learning (*Sustain-native*)
 - Sync playlists, smart playlists, and artists to USB sticks, SD cards, and Android phones over MTP, incrementally, as a deduplicated `.m3u8` tree or one folder per selected source (*Sustain-native*)
+- Sync to a classic iPod (beta): the iPod's own menus list the synced artists, albums, songs and playlists, with album covers, on every iPod classic, iPod nano up to the 4th generation, iPod mini, and iPod 1G–5G (*iTunes-adjacent*)
 - **CDJ/XDJ-ready Rekordbox export**: writes the full Pioneer feature set to the drive (BPM, key, beat grids, waveforms and artwork) so the hardware reads it natively; the only Linux music app I know of that does this, not just copies files (*Sustain-native*)
 - Play and rip audio CDs: play a disc straight from the drive, or rip it into the library with MusicBrainz Disc ID lookup, embedded cover art, and FLAC / MP3 256 / MP3 320 encoding (*iso-iTunes*)
 - MPRIS integration: media keys, the desktop's media controls, and the lock screen drive playback (*Sustain-native*)
