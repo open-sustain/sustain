@@ -19,7 +19,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use sustain_domain::{
-    AnlzRecord, DeviceKind, DeviceLayout, DeviceRelativePath, PioneerExportRecord, WaveformSegments,
+    AnlzRecord, CatalogueRecord, DeviceKind, DeviceLayout, DeviceRelativePath, WaveformSegments,
 };
 use sustain_pioneer::{
     AnlzInput, PioneerFileType, PioneerPlaylist, PioneerTrack, anlz, device_setting, path_hash, pdb,
@@ -453,7 +453,7 @@ pub(crate) fn write_pioneer(
     base: &DeviceRelativePath,
     placements: &[Placement],
     present: &HashSet<usize>,
-    record: &mut PioneerExportRecord,
+    record: &mut CatalogueRecord,
     journal: &mut dyn ManifestJournal,
 ) -> Result<Finalized, SyncError> {
     let assets = req.pioneer_assets()?;
@@ -616,7 +616,7 @@ pub(crate) fn write_pioneer(
         .collect();
     record.artwork.extend(artwork.keys().cloned());
     journal
-        .record_pioneer_export(record)
+        .record_catalogue(record)
         .map_err(SyncError::Journal)?;
     for (path, bytes) in &artwork {
         let on_device = base.join(path);
@@ -639,14 +639,14 @@ pub(crate) fn write_pioneer(
     let database = sustain_pioneer::database_identity(&bytes);
     record.databases.insert(database.clone());
     journal
-        .record_pioneer_export(record)
+        .record_catalogue(record)
         .map_err(SyncError::Journal)?;
     transport
         .write_file(&pdb_path, &bytes)
         .map_err(|error| SyncError::io(pdb_path.as_str(), error))?;
     record.databases = BTreeSet::from([database]);
     journal
-        .record_pioneer_export(record)
+        .record_catalogue(record)
         .map_err(SyncError::Journal)?;
 
     // Only now that no database on the drive names them do the covers the
@@ -660,7 +660,7 @@ pub(crate) fn write_pioneer(
         record.artwork.remove(&path);
     }
     journal
-        .record_pioneer_export(record)
+        .record_catalogue(record)
         .map_err(SyncError::Journal)?;
 
     // Without a settings file, players show the waveforms in BLUE

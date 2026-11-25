@@ -12,7 +12,7 @@
 
 use std::error::Error;
 
-use sustain_domain::{DeviceRelativePath, PioneerExportRecord, SyncManifestEntry};
+use sustain_domain::{CatalogueRecord, DeviceRelativePath, SyncManifestEntry};
 
 /// Why the journal could not record a change.
 pub type JournalError = Box<dyn Error + Send + Sync>;
@@ -31,5 +31,5 @@ pub trait ManifestJournal {
     /// The device's Pioneer export is now vouched for by `record`, in
     /// place of the last one. Recorded before each change it covers is
     /// made, so it vouches for the files a run that dies part-way leaves.
-    fn record_pioneer_export(&mut self, record: &PioneerExportRecord) -> Result<(), JournalError>;
+    fn record_catalogue(&mut self, record: &CatalogueRecord) -> Result<(), JournalError>;
 }

@@ -56,9 +56,9 @@ pub const FOREIGN_CATALOG_RELATIVE_PATHS: [&str; 2] = [
 
 /// The exact track database `bytes` make: what identifies the database a
 /// writer left on a drive.
-pub fn database_identity(bytes: &[u8]) -> sustain_domain::PioneerDatabase {
+pub fn database_identity(bytes: &[u8]) -> sustain_domain::CatalogueDatabase {
     use sha2::{Digest, Sha256};
-    sustain_domain::PioneerDatabase {
+    sustain_domain::CatalogueDatabase {
         size_bytes: u64::try_from(bytes.len()).expect("a byte length fits in u64"),
         sha256: Sha256::digest(bytes)
             .iter()

@@ -9,8 +9,7 @@
 use std::collections::{HashMap, HashSet};
 
 use sustain_domain::{
-    AnlzRecord, CollationKey, DeviceLayout, DeviceRelativePath, PioneerExportRecord,
-    SyncManifestEntry,
+    AnlzRecord, CatalogueRecord, CollationKey, DeviceLayout, DeviceRelativePath, SyncManifestEntry,
 };
 use sustain_pioneer::path_hash::AnlzSlot;
 
@@ -165,15 +164,14 @@ pub fn plan(transport: &dyn DeviceTransport, req: &SyncRequest) -> Result<SyncPl
         .sum();
     let genre_bytes = genre_breakdown(req, &placements);
     let blocker = match req.device.layout {
-        DeviceLayout::Pioneer => match pioneer_export::ensure_database_is_ours(
-            transport,
-            &base,
-            &req.previous_pioneer_export,
-        ) {
-            Ok(()) => None,
-            Err(SyncError::Blocked(blocker)) => Some(blocker),
-            Err(error) => return Err(error),
-        },
+        DeviceLayout::Pioneer => {
+            match pioneer_export::ensure_database_is_ours(transport, &base, &req.previous_catalogue)
+            {
+                Ok(()) => None,
+                Err(SyncError::Blocked(blocker)) => Some(blocker),
+                Err(error) => return Err(error),
+            }
+        }
         DeviceLayout::M3u | DeviceLayout::FolderPerPlaylist => None,
     };
     Ok(SyncPlan {
@@ -263,7 +261,7 @@ pub fn sync(
             error,
             manifest: req.previous_manifest.clone(),
             playlist_files: req.previous_playlist_files.clone(),
-            pioneer_export: req.previous_pioneer_export.clone(),
+            catalogue: req.previous_catalogue.clone(),
         })
     };
     if req.tracks.is_empty() {
@@ -274,7 +272,7 @@ pub fn sync(
             cancelled: true,
             manifest: req.previous_manifest.clone(),
             playlist_files: req.previous_playlist_files.clone(),
-            pioneer_export: req.previous_pioneer_export.clone(),
+            catalogue: req.previous_catalogue.clone(),
             ..SyncOutcome::default()
         });
     }
@@ -282,7 +280,7 @@ pub fn sync(
     // Before the drive is changed in any way: a Pioneer export that is
     // not Sustain's is left exactly as it is.
     if req.device.layout == DeviceLayout::Pioneer {
-        let record = &req.previous_pioneer_export;
+        let record = &req.previous_catalogue;
         pioneer_export::ensure_database_is_ours(transport, &base, record).map_err(untouched)?;
         let artwork: Vec<DeviceRelativePath> = req
             .pioneer_assets()
@@ -320,7 +318,7 @@ pub fn sync(
             error,
             manifest: run.device_manifest(),
             playlist_files: run.device_playlist_files(),
-            pioneer_export: run.pioneer_export.clone(),
+            catalogue: run.catalogue.clone(),
         })),
     }
 }
@@ -352,7 +350,7 @@ struct Run<'a> {
     playlists_removed: HashSet<&'a DeviceRelativePath>,
     /// The Pioneer database and artwork the device holds from Sustain,
     /// kept current as the run writes and removes them.
-    pioneer_export: PioneerExportRecord,
+    catalogue: CatalogueRecord,
 }
 
 impl<'a> Run<'a> {
@@ -389,7 +387,7 @@ impl<'a> Run<'a> {
             removed: HashSet::new(),
             playlists_written: Vec::new(),
             playlists_removed: HashSet::new(),
-            pioneer_export: req.previous_pioneer_export.clone(),
+            catalogue: req.previous_catalogue.clone(),
         };
         // Unchanged files stay in the manifest as-is.
         for &index in &diff.unchanged {
@@ -522,7 +520,7 @@ impl<'a> Run<'a> {
                     base,
                     placements,
                     &self.present,
-                    &mut self.pioneer_export,
+                    &mut self.catalogue,
                     journal,
                 )?,
             };
@@ -649,7 +647,7 @@ impl<'a> Run<'a> {
         SyncOutcome {
             manifest: self.device_manifest(),
             playlist_files: self.device_playlist_files(),
-            pioneer_export: self.pioneer_export.clone(),
+            catalogue: self.catalogue.clone(),
             ..self.outcome
         }
     }

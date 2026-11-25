@@ -11,7 +11,7 @@
 use std::{ops::Deref, path::PathBuf, time::Duration};
 
 use sustain_domain::{
-    BeatGrid, Bpm, DeviceRelativePath, MusicalKey, PioneerExportRecord, SourceFileStat,
+    BeatGrid, Bpm, CatalogueRecord, DeviceRelativePath, MusicalKey, SourceFileStat,
     SourceFingerprint, SyncDevice, SyncManifestEntry, TrackContentHash, TrackId, WaveformSegments,
 };
 use sustain_pioneer::ArtworkSet;
@@ -123,7 +123,7 @@ pub struct SyncRequest {
     pub previous_playlist_files: Vec<DeviceRelativePath>,
     /// The database and artwork the previous syncs left in the device's
     /// Pioneer export. Empty for other layouts.
-    pub previous_pioneer_export: PioneerExportRecord,
+    pub previous_catalogue: CatalogueRecord,
     /// Delete on-device files no longer in the selection.
     pub remove_stale: bool,
     /// `YYYY-MM-DD` stamped into the Pioneer analyze-date field.
@@ -354,7 +354,7 @@ pub struct SyncOutcome {
     pub playlist_files: Vec<DeviceRelativePath>,
     /// The Pioneer database and artwork the device holds from Sustain, to
     /// persist.
-    pub pioneer_export: PioneerExportRecord,
+    pub catalogue: CatalogueRecord,
     /// True if the run stopped early because cancellation was requested.
     pub cancelled: bool,
 }
@@ -447,7 +447,7 @@ pub struct SyncFailure {
     pub playlist_files: Vec<DeviceRelativePath>,
     /// The Pioneer database and artwork the device holds from Sustain, to
     /// persist, kept current as the run changed them.
-    pub pioneer_export: PioneerExportRecord,
+    pub catalogue: CatalogueRecord,
 }
 
 impl std::fmt::Display for SyncFailure {

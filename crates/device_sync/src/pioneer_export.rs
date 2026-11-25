@@ -14,7 +14,7 @@
 
 use std::io;
 
-use sustain_domain::{DeviceRelativePath, PioneerExportRecord};
+use sustain_domain::{CatalogueRecord, DeviceRelativePath};
 use sustain_pioneer::artwork::ARTWORK_BUCKET;
 
 use crate::model::{SyncBlocker, SyncError};
@@ -39,7 +39,7 @@ pub(crate) fn artwork_bucket() -> DeviceRelativePath {
 pub(crate) fn ensure_database_is_ours(
     transport: &dyn DeviceTransport,
     base: &DeviceRelativePath,
-    record: &PioneerExportRecord,
+    record: &CatalogueRecord,
 ) -> Result<(), SyncError> {
     let foreign = Err(SyncError::Blocked(SyncBlocker::ForeignPioneerExport));
     for catalog in sustain_pioneer::FOREIGN_CATALOG_RELATIVE_PATHS {
@@ -82,7 +82,7 @@ pub(crate) fn ensure_database_is_ours(
 pub(crate) fn ensure_artwork_is_ours<'a>(
     transport: &dyn DeviceTransport,
     base: &DeviceRelativePath,
-    record: &PioneerExportRecord,
+    record: &CatalogueRecord,
     to_write: impl IntoIterator<Item = &'a DeviceRelativePath>,
 ) -> Result<(), SyncError> {
     for path in to_write {

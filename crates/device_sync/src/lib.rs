@@ -50,8 +50,8 @@ mod tests {
         time::Duration,
     };
     use sustain_domain::{
-        AnlzRecord, BeatGrid, Bpm, DeviceKind, DeviceLayout, DeviceRelativePath, FilesPerFolderCap,
-        PioneerExportRecord, SourceFileStat, SyncDevice, SyncDeviceId, TrackId,
+        AnlzRecord, BeatGrid, Bpm, CatalogueRecord, DeviceKind, DeviceLayout, DeviceRelativePath,
+        FilesPerFolderCap, SourceFileStat, SyncDevice, SyncDeviceId, TrackId,
     };
 
     struct Fixture {
@@ -132,7 +132,7 @@ mod tests {
     /// from.
     struct ReplayJournal {
         manifest: std::collections::BTreeMap<String, sustain_domain::SyncManifestEntry>,
-        pioneer_export: PioneerExportRecord,
+        catalogue: CatalogueRecord,
     }
 
     impl ReplayJournal {
@@ -143,7 +143,7 @@ mod tests {
                     .iter()
                     .map(|entry| (entry.on_device_path.as_str().to_owned(), entry.clone()))
                     .collect(),
-                pioneer_export: req.previous_pioneer_export.clone(),
+                catalogue: req.previous_catalogue.clone(),
             }
         }
 
@@ -167,11 +167,8 @@ mod tests {
             Ok(())
         }
 
-        fn record_pioneer_export(
-            &mut self,
-            record: &PioneerExportRecord,
-        ) -> Result<(), JournalError> {
-            self.pioneer_export = record.clone();
+        fn record_catalogue(&mut self, record: &CatalogueRecord) -> Result<(), JournalError> {
+            self.catalogue = record.clone();
             Ok(())
         }
     }
@@ -218,8 +215,8 @@ mod tests {
         let mut journal = ReplayJournal::over(req);
         let result = sync(transport, req, &mut journal, progress, cancel);
         let (reported, reported_export) = match &result {
-            Ok(outcome) => (&outcome.manifest, &outcome.pioneer_export),
-            Err(failure) => (&failure.manifest, &failure.pioneer_export),
+            Ok(outcome) => (&outcome.manifest, &outcome.catalogue),
+            Err(failure) => (&failure.manifest, &failure.catalogue),
         };
         assert_eq!(
             tracked_files(&journal.manifest()),
@@ -229,11 +226,11 @@ mod tests {
         // The journal vouches for at least what the run reports.
         assert!(
             journal
-                .pioneer_export
+                .catalogue
                 .databases
                 .is_superset(&reported_export.databases)
                 && journal
-                    .pioneer_export
+                    .catalogue
                     .artwork
                     .is_superset(&reported_export.artwork),
             "the journal vouches for the Pioneer export the run reports"
@@ -416,7 +413,7 @@ mod tests {
             }],
             previous_manifest: prev,
             previous_playlist_files: Vec::new(),
-            previous_pioneer_export: sustain_domain::PioneerExportRecord::default(),
+            previous_catalogue: sustain_domain::CatalogueRecord::default(),
             remove_stale: remove,
             export_date: "2026-01-01".into(),
         }
@@ -432,7 +429,7 @@ mod tests {
     ) -> SyncRequest {
         SyncRequest {
             previous_playlist_files: previous.playlist_files.clone(),
-            previous_pioneer_export: previous.pioneer_export.clone(),
+            previous_catalogue: previous.catalogue.clone(),
             ..request(fx, layout, previous.manifest.clone(), remove)
         }
     }
@@ -492,7 +489,7 @@ mod tests {
                 .collect(),
             previous_manifest: previous.manifest.clone(),
             previous_playlist_files: previous.playlist_files.clone(),
-            previous_pioneer_export: previous.pioneer_export.clone(),
+            previous_catalogue: previous.catalogue.clone(),
             ..request(fx, layout, Vec::new(), remove)
         }
     }
@@ -762,7 +759,7 @@ mod tests {
             playlists,
             previous_manifest: prev,
             previous_playlist_files: Vec::new(),
-            previous_pioneer_export: sustain_domain::PioneerExportRecord::default(),
+            previous_catalogue: sustain_domain::CatalogueRecord::default(),
             remove_stale: false,
             export_date: "2026-01-01".into(),
         }
@@ -1355,7 +1352,7 @@ mod tests {
         );
         let failure = sync_blocked(dest, &prepared_with_covers(&req));
         assert!(failure.manifest.is_empty());
-        assert_eq!(failure.pioneer_export, PioneerExportRecord::default());
+        assert_eq!(failure.catalogue, CatalogueRecord::default());
         assert_eq!(
             snapshot(dest),
             before,
@@ -1374,7 +1371,7 @@ mod tests {
         .expect("sync ok");
         assert_eq!(outcome.copied, 2);
         assert_eq!(
-            outcome.pioneer_export.databases,
+            outcome.catalogue.databases,
             std::collections::BTreeSet::from([sustain_pioneer::database_identity(
                 &std::fs::read(pdb_on(dest)).expect("pdb")
             )])
@@ -1395,7 +1392,7 @@ mod tests {
         let second = run(dest, &again);
         // Once published, only the new database is Sustain's.
         assert_eq!(
-            second.pioneer_export.databases,
+            second.catalogue.databases,
             std::collections::BTreeSet::from([sustain_pioneer::database_identity(
                 &std::fs::read(pdb_on(dest)).expect("pdb")
             )])
@@ -1412,7 +1409,7 @@ mod tests {
             Some(SyncBlocker::ForeignPioneerExport)
         );
         let failure = sync_blocked(dest, &prepared(&after_player));
-        assert_eq!(failure.pioneer_export, second.pioneer_export);
+        assert_eq!(failure.catalogue, second.catalogue);
         assert_eq!(failure.manifest, second.manifest);
         assert_eq!(snapshot(dest), before);
     }
@@ -1427,7 +1424,7 @@ mod tests {
         );
         // As a device synced before Sustain kept the record.
         let unrecorded = SyncRequest {
-            previous_pioneer_export: PioneerExportRecord::default(),
+            previous_catalogue: CatalogueRecord::default(),
             ..resync_request(&fx, DeviceLayout::Pioneer, &first, false)
         };
         assert_eq!(
@@ -1460,7 +1457,7 @@ mod tests {
         .expect("resync");
         assert!(pdb_on(dest).is_file());
         assert!(artwork_on(dest, "a1.jpg").is_file());
-        assert_eq!(second.pioneer_export.artwork, first.pioneer_export.artwork);
+        assert_eq!(second.catalogue.artwork, first.catalogue.artwork);
     }
 
     #[test]
@@ -1481,14 +1478,14 @@ mod tests {
             device_path("PIONEER/Artwork/00001/a1.jpg"),
             device_path("PIONEER/Artwork/00001/a1_m.jpg"),
         ]);
-        assert_eq!(first.pioneer_export.artwork, written);
+        assert_eq!(first.catalogue.artwork, written);
 
         // Covers dropped: Sustain's own thumbnails go, the other file stays.
         let second = run(
             dest,
             &resync_request(&fx, DeviceLayout::Pioneer, &first, false),
         );
-        assert!(second.pioneer_export.artwork.is_empty());
+        assert!(second.catalogue.artwork.is_empty());
         assert!(!artwork_on(dest, "a1.jpg").exists());
         assert!(!artwork_on(dest, "a1_m.jpg").exists());
         assert_eq!(
@@ -1618,7 +1615,7 @@ mod tests {
 
         let survived = SyncRequest {
             previous_manifest: journal.manifest(),
-            previous_pioneer_export: journal.pioneer_export.clone(),
+            previous_catalogue: journal.catalogue.clone(),
             ..request(&fx, DeviceLayout::Pioneer, Vec::new(), false)
         };
         assert_eq!(
@@ -1656,12 +1653,12 @@ mod tests {
             let on_drive =
                 sustain_pioneer::database_identity(&std::fs::read(pdb_on(dest)).expect("pdb"));
             assert!(
-                failure.pioneer_export.databases.contains(&on_drive),
+                failure.catalogue.databases.contains(&on_drive),
                 "after_publishing: {after_publishing}"
             );
             let next = SyncRequest {
                 previous_manifest: failure.manifest.clone(),
-                previous_pioneer_export: failure.pioneer_export.clone(),
+                previous_catalogue: failure.catalogue.clone(),
                 ..request(&fx, DeviceLayout::Pioneer, Vec::new(), false)
             };
             run(dest, &next);
@@ -1748,7 +1745,7 @@ mod tests {
         .expect_err("the database write failed");
         assert!(artwork_on(dest, "a1.jpg").is_file());
         assert!(artwork_on(dest, "a1_m.jpg").is_file());
-        assert_eq!(failure.pioneer_export.artwork, first.pioneer_export.artwork);
+        assert_eq!(failure.catalogue.artwork, first.catalogue.artwork);
     }
 
     #[test]
@@ -1791,7 +1788,7 @@ mod tests {
             }],
             previous_manifest: Vec::new(),
             previous_playlist_files: Vec::new(),
-            previous_pioneer_export: sustain_domain::PioneerExportRecord::default(),
+            previous_catalogue: sustain_domain::CatalogueRecord::default(),
             remove_stale: false,
             export_date: "2026-01-01".into(),
         };
@@ -1970,7 +1967,7 @@ mod tests {
             }],
             previous_manifest: first.manifest.clone(),
             previous_playlist_files: Vec::new(),
-            previous_pioneer_export: sustain_domain::PioneerExportRecord::default(),
+            previous_catalogue: sustain_domain::CatalogueRecord::default(),
             remove_stale: false,
             export_date: "2026-01-01".into(),
         };
@@ -2001,7 +1998,7 @@ mod tests {
             }],
             previous_manifest: first.manifest.clone(),
             previous_playlist_files: Vec::new(),
-            previous_pioneer_export: sustain_domain::PioneerExportRecord::default(),
+            previous_catalogue: sustain_domain::CatalogueRecord::default(),
             remove_stale: remove,
             export_date: "2026-01-01".into(),
         };
@@ -2045,7 +2042,7 @@ mod tests {
             }],
             previous_manifest: first.manifest.clone(),
             previous_playlist_files: Vec::new(),
-            previous_pioneer_export: sustain_domain::PioneerExportRecord::default(),
+            previous_catalogue: sustain_domain::CatalogueRecord::default(),
             remove_stale: true,
             export_date: "2026-01-01".into(),
         };
@@ -2132,7 +2129,7 @@ mod tests {
             }],
             previous_manifest: first.manifest.clone(),
             previous_playlist_files: Vec::new(),
-            previous_pioneer_export: sustain_domain::PioneerExportRecord::default(),
+            previous_catalogue: sustain_domain::CatalogueRecord::default(),
             remove_stale: true,
             export_date: "2026-01-01".into(),
         };
@@ -2240,10 +2237,7 @@ mod tests {
                 Ok(())
             }
 
-            fn record_pioneer_export(
-                &mut self,
-                _record: &PioneerExportRecord,
-            ) -> Result<(), JournalError> {
+            fn record_catalogue(&mut self, _record: &CatalogueRecord) -> Result<(), JournalError> {
                 Ok(())
             }
         }
@@ -2292,7 +2286,7 @@ mod tests {
             }],
             previous_manifest: first.manifest,
             previous_playlist_files: Vec::new(),
-            previous_pioneer_export: sustain_domain::PioneerExportRecord::default(),
+            previous_catalogue: sustain_domain::CatalogueRecord::default(),
             remove_stale: true,
             export_date: "2026-01-01".into(),
         };
@@ -2508,7 +2502,7 @@ mod tests {
             playlists: Vec::new(),
             previous_manifest: Vec::new(),
             previous_playlist_files: Vec::new(),
-            previous_pioneer_export: sustain_domain::PioneerExportRecord::default(),
+            previous_catalogue: sustain_domain::CatalogueRecord::default(),
             remove_stale: false,
             export_date: "2026-01-01".into(),
         };

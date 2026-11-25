@@ -18,7 +18,7 @@ pub use sustain_domain::{
     TrackColumnLayoutScope, TrackColumnSort, TrackId, TrackLocation, TrackRelativePath,
     WaveformSegments,
 };
-use sustain_domain::{BeatGrid, DeviceRelativePath, PioneerExportRecord, SmartPlaylistRuleSet};
+use sustain_domain::{BeatGrid, CatalogueRecord, DeviceRelativePath, SmartPlaylistRuleSet};
 pub use sustain_domain::{SourceFileStat, SourceFingerprint};
 
 mod migrations;
@@ -798,15 +798,12 @@ pub trait LibraryStore: Send + Sync {
 
     /// Replace the record of the Pioneer export the last sync left on a
     /// device: the digest of its track database and its artwork files.
-    fn save_device_pioneer_export(
-        &self,
-        id: &SyncDeviceId,
-        record: &PioneerExportRecord,
-    ) -> StoreResult<()>;
+    fn save_device_catalogue(&self, id: &SyncDeviceId, record: &CatalogueRecord)
+    -> StoreResult<()>;
 
     /// Load the record of the Pioneer export Sustain wrote to a device —
     /// empty when it wrote none.
-    fn device_pioneer_export(&self, id: &SyncDeviceId) -> StoreResult<PioneerExportRecord>;
+    fn device_catalogue(&self, id: &SyncDeviceId) -> StoreResult<CatalogueRecord>;
 }
 
 #[derive(Debug)]

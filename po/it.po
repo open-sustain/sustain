@@ -6,7 +6,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Sustain\n"
 "Report-Msgid-Bugs-To: https://github.com/open-sustain/sustain/issues\n"
-"POT-Creation-Date: 2026-11-25 10:35+0100\n"
+"POT-Creation-Date: 2026-11-25 17:16+0100\n"
 "PO-Revision-Date: 2026-11-16 20:38+0100\n"
 "Last-Translator: Sustain maintainers\n"
 "Language-Team: Italian\n"
@@ -128,7 +128,7 @@ msgstr "Una regola di testo richiede un valore."
 msgid "AIFF audio file"
 msgstr "File audio AIFF"
 
-#: crates/ui_gtk/src/preferences/mod.rs:362
+#: crates/ui_gtk/src/preferences/mod.rs:359
 #, rust-format
 msgid "About"
 msgstr "Informazioni su"
@@ -240,7 +240,7 @@ msgstr[0] "Analizza {count} brano mancante"
 msgstr[1] "Analizza {count} brani mancanti"
 
 #: crates/ui_gtk/src/device_panel.rs:399
-#: crates/ui_gtk/src/preferences/mod.rs:355
+#: crates/ui_gtk/src/preferences/mod.rs:352
 #, rust-format
 msgid "Analysis"
 msgstr "Analisi"
@@ -282,7 +282,7 @@ msgstr "Analisi dei brani ({processed}/{total})…"
 msgid "Another background task is already running."
 msgstr "Un'altra attività in background è già in corso."
 
-#: crates/ui_gtk/src/shortcuts.rs:468
+#: crates/ui_gtk/src/shortcuts.rs:470
 #, rust-format
 msgctxt "shortcuts group"
 msgid "Application"
@@ -564,13 +564,13 @@ msgstr "Scegli cartella"
 msgid "Choose the CD import format"
 msgstr "Scegli il formato di importazione CD"
 
-#: crates/ui_gtk/src/preferences/mod.rs:398
+#: crates/ui_gtk/src/preferences/mod.rs:395
 #: crates/ui_gtk/src/smart_playlist_editor.rs:632
 #, rust-format
 msgid "Close"
 msgstr "Chiudi"
 
-#: crates/ui_gtk/src/shortcuts.rs:133
+#: crates/ui_gtk/src/shortcuts.rs:135
 #, rust-format
 msgid "Close window"
 msgstr "Chiudi finestra"
@@ -935,7 +935,7 @@ msgstr "Modifica…"
 msgid "Eject"
 msgstr "Espelli"
 
-#: crates/ui_gtk/src/preferences/mod.rs:354
+#: crates/ui_gtk/src/preferences/mod.rs:351
 #, rust-format
 msgid "Encoding"
 msgstr "Codifica"
@@ -1043,7 +1043,7 @@ msgstr ""
 msgid "Files per folder"
 msgstr "File per cartella"
 
-#: crates/ui_gtk/src/shortcuts.rs:115
+#: crates/ui_gtk/src/shortcuts.rs:117
 #, rust-format
 msgid "Focus search bar"
 msgstr "Attiva la barra di ricerca"
@@ -1083,7 +1083,7 @@ msgctxt "statistics section"
 msgid "Genre"
 msgstr "Genere"
 
-#: crates/ui_gtk/src/shortcuts.rs:116 crates/ui_gtk/src/track_context.rs:263
+#: crates/ui_gtk/src/shortcuts.rs:118 crates/ui_gtk/src/track_context.rs:263
 #, rust-format
 msgid "Get Info"
 msgstr "Informazioni"
@@ -1111,7 +1111,7 @@ msgstr "Editor dei metadati con replica dei tag su ID3, Vorbis e MP4"
 msgid "Grouping"
 msgstr "Raggruppamento"
 
-#: crates/ui_gtk/src/shortcuts.rs:135
+#: crates/ui_gtk/src/shortcuts.rs:137
 #, rust-format
 msgid "Help"
 msgstr "Aiuto"
@@ -1209,7 +1209,7 @@ msgstr ""
 msgid "Its tags could not be read."
 msgstr "Impossibile leggere i suoi tag."
 
-#: crates/ui_gtk/src/shortcuts.rs:128
+#: crates/ui_gtk/src/shortcuts.rs:130
 #, rust-format
 msgid "Jump to currently playing track"
 msgstr "Vai al brano in riproduzione"
@@ -1243,7 +1243,7 @@ msgstr "Rilevamento della tonalità"
 msgid "Key must be a musical key, such as Am, F#, or 8A."
 msgstr "La tonalità deve essere una tonalità musicale, come Am, F# o 8A."
 
-#: crates/ui_gtk/src/shortcuts.rs:137
+#: crates/ui_gtk/src/shortcuts.rs:139
 #, rust-format
 msgid "Keyboard shortcuts"
 msgstr "Scorciatoie da tastiera"
@@ -1295,12 +1295,12 @@ msgstr "Ultimo salto"
 msgid "Left alone: {groups}."
 msgstr "Lasciati invariati: {groups}."
 
-#: crates/ui_gtk/src/preferences/mod.rs:353 crates/ui_gtk/src/sidebar.rs:190
+#: crates/ui_gtk/src/preferences/mod.rs:350 crates/ui_gtk/src/sidebar.rs:190
 #, rust-format
 msgid "Library"
 msgstr "Libreria"
 
-#: crates/ui_gtk/src/shortcuts.rs:466
+#: crates/ui_gtk/src/shortcuts.rs:468
 #, rust-format
 msgctxt "shortcuts group"
 msgid "Library"
@@ -1633,12 +1633,12 @@ msgstr "Nuova cartella di playlist"
 msgid "New Smart Playlist…"
 msgstr "Nuova playlist intelligente…"
 
-#: crates/ui_gtk/src/shortcuts.rs:109
+#: crates/ui_gtk/src/shortcuts.rs:111
 #, rust-format
 msgid "New playlist"
 msgstr "Nuova playlist"
 
-#: crates/ui_gtk/src/shortcuts.rs:112
+#: crates/ui_gtk/src/shortcuts.rs:114
 #, rust-format
 msgid "New smart playlist"
 msgstr "Nuova playlist intelligente"
@@ -1653,7 +1653,7 @@ msgstr ""
 "brano. I brani esistenti vengono organizzati in background quando questa "
 "opzione è attiva."
 
-#: crates/ui_gtk/src/shortcuts.rs:125
+#: crates/ui_gtk/src/shortcuts.rs:127
 #, rust-format
 msgid "Next track"
 msgstr "Brano successivo"
@@ -1812,7 +1812,7 @@ msgstr ""
 "Uno o più file selezionati mancano dal disco. Ripristinali o rimuovili, poi "
 "consolida di nuovo."
 
-#: crates/ui_gtk/src/preferences/mod.rs:356
+#: crates/ui_gtk/src/preferences/mod.rs:353
 #, rust-format
 msgid "Online"
 msgstr "Online"
@@ -1956,7 +1956,7 @@ msgctxt "playback control"
 msgid "Play"
 msgstr "Riproduci"
 
-#: crates/ui_gtk/src/shortcuts.rs:120
+#: crates/ui_gtk/src/shortcuts.rs:122
 #, rust-format
 msgid "Play / pause"
 msgstr "Riproduci / pausa"
@@ -1988,7 +1988,7 @@ msgstr "Riproduzioni"
 msgid "Play/Pause"
 msgstr "Riproduci/Pausa"
 
-#: crates/ui_gtk/src/shortcuts.rs:465
+#: crates/ui_gtk/src/shortcuts.rs:467
 #, rust-format
 msgctxt "shortcuts group"
 msgid "Playback"
@@ -2010,7 +2010,7 @@ msgstr "Riproduzione non riuscita. Passaggio al brano successivo."
 msgid "Playback is not available."
 msgstr "La riproduzione non è disponibile."
 
-#: crates/app_runtime/src/device_sync.rs:1147
+#: crates/app_runtime/src/device_sync.rs:1144
 #, rust-format
 msgid "Playlist"
 msgstr "Playlist"
@@ -2045,12 +2045,12 @@ msgstr "Playlist, playlist intelligenti e cartelle di playlist"
 msgid "Plays"
 msgstr "Riproduzioni"
 
-#: crates/ui_gtk/src/preferences/mod.rs:237 crates/ui_gtk/src/shortcuts.rs:141
+#: crates/ui_gtk/src/preferences/mod.rs:234 crates/ui_gtk/src/shortcuts.rs:143
 #, rust-format
 msgid "Preferences"
 msgstr "Preferenze"
 
-#: crates/ui_gtk/src/preferences/mod.rs:204
+#: crates/ui_gtk/src/preferences/mod.rs:201
 #, rust-format
 msgid "Preferences (Ctrl+,)"
 msgstr "Preferenze (Ctrl+,)"
@@ -2074,7 +2074,7 @@ msgstr ""
 msgid "Previous"
 msgstr "Precedente"
 
-#: crates/ui_gtk/src/shortcuts.rs:122
+#: crates/ui_gtk/src/shortcuts.rs:124
 #, rust-format
 msgid "Previous track"
 msgstr "Brano precedente"
@@ -2145,7 +2145,7 @@ msgid_plural "Queued {count} tracks for tag enrichment."
 msgstr[0] "{count} brano in coda per l'arricchimento dei tag."
 msgstr[1] "{count} brani in coda per l'arricchimento dei tag."
 
-#: crates/ui_gtk/src/shortcuts.rs:134
+#: crates/ui_gtk/src/shortcuts.rs:136
 #, rust-format
 msgid "Quit Sustain"
 msgstr "Esci da Sustain"
@@ -2278,7 +2278,7 @@ msgstr "Recupera…"
 msgid "Retrieving online data ({completed}/{total})..."
 msgstr "Recupero dei dati online ({completed}/{total})…"
 
-#: crates/ui_gtk/src/shortcuts.rs:118
+#: crates/ui_gtk/src/shortcuts.rs:120
 #, rust-format
 msgid "Reveal selected track in Files"
 msgstr "Mostra il brano selezionato in File"
@@ -2371,7 +2371,7 @@ msgstr "Scansione della libreria…"
 msgid "Search"
 msgstr "Cerca"
 
-#: crates/ui_gtk/src/shortcuts.rs:131
+#: crates/ui_gtk/src/shortcuts.rs:133
 #, rust-format
 msgid "Select all tracks"
 msgstr "Seleziona tutti i brani"
@@ -2402,7 +2402,7 @@ msgstr ""
 "restringilo se i risultati tendono a cadere a metà o al doppio del tempo "
 "atteso."
 
-#: crates/ui_gtk/src/preferences/mod.rs:193
+#: crates/ui_gtk/src/preferences/mod.rs:190
 #, rust-format
 msgid "Settings"
 msgstr "Impostazioni"
@@ -2459,7 +2459,7 @@ msgctxt "playback control"
 msgid "Shuffle"
 msgstr "Casuale"
 
-#: crates/ui_gtk/src/preferences/mod.rs:359
+#: crates/ui_gtk/src/preferences/mod.rs:356
 #, rust-format
 msgctxt "preferences tab"
 msgid "Shuffle"
@@ -2640,7 +2640,7 @@ msgstr ""
 "Sustain ha conservato i file di ripristino perché la pulizia non è stata "
 "completata in modo sicuro."
 
-#: crates/ui_gtk/src/shortcuts.rs:462
+#: crates/ui_gtk/src/shortcuts.rs:464
 #, rust-format
 msgid "Sustain shortcuts"
 msgstr "Scorciatoie di Sustain"
@@ -3328,7 +3328,7 @@ msgstr "Artisti vari"
 msgid "Version {version}"
 msgstr "Versione {version}"
 
-#: crates/ui_gtk/src/preferences/mod.rs:361
+#: crates/ui_gtk/src/preferences/mod.rs:358
 #, rust-format
 msgid "Views"
 msgstr "Viste"
@@ -3446,17 +3446,10 @@ msgctxt "smart playlist operator"
 msgid "contains"
 msgstr "contiene"
 
-#: crates/app_runtime/src/device_sync.rs:1233
+#: crates/app_runtime/src/device_sync.rs:1230
 #, rust-format
 msgid "could not inspect source track: {error}"
 msgstr "impossibile esaminare il brano di origine: {error}"
-
-#: crates/app_runtime/src/device_sync.rs:1114
-#, rust-format
-msgid "could not load device Pioneer export record: {error}"
-msgstr ""
-"impossibile caricare il registro di esportazione Pioneer del dispositivo: "
-"{error}"
 
 #: crates/app_runtime/src/device_sync.rs:1060
 #, rust-format
@@ -3497,6 +3490,11 @@ msgstr "impossibile caricare le playlist: {error}"
 #, rust-format
 msgid "could not load smart playlists: {error}"
 msgstr "impossibile caricare le playlist smart: {error}"
+
+#: crates/app_runtime/src/device_sync.rs:1111
+#, rust-format
+msgid "could not load the device's catalogue record: {error}"
+msgstr "impossibile caricare il registro del catalogo del dispositivo: {error}"
 
 #: crates/app_runtime/src/device_sync.rs:871
 #: crates/app_runtime/src/device_sync.rs:987

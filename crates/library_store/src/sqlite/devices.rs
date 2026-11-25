@@ -6,8 +6,8 @@
 
 use super::*;
 use sustain_domain::{
-    AnlzRecord, DeviceKind, DeviceLayout, DeviceRelativePath, FilesPerFolderCap, PioneerDatabase,
-    PioneerExportRecord, PlaylistItem, SyncDevice, SyncDeviceId, SyncManifestEntry,
+    AnlzRecord, CatalogueDatabase, CatalogueRecord, DeviceKind, DeviceLayout, DeviceRelativePath,
+    FilesPerFolderCap, PlaylistItem, SyncDevice, SyncDeviceId, SyncManifestEntry,
 };
 
 pub(super) fn save_sync_device(connection: &Connection, device: &SyncDevice) -> StoreResult<()> {
@@ -363,13 +363,13 @@ pub(super) fn device_playlist_files(
     Ok(paths)
 }
 
-pub(super) fn save_device_pioneer_export(
+pub(super) fn save_device_catalogue(
     connection: &mut Connection,
     id: &SyncDeviceId,
-    record: &PioneerExportRecord,
+    record: &CatalogueRecord,
 ) -> StoreResult<()> {
     let transaction = connection.transaction().map_err(StoreError::from)?;
-    for table in ["sync_pioneer_databases", "sync_pioneer_artwork"] {
+    for table in ["sync_catalogue_databases", "sync_catalogue_artwork"] {
         transaction
             .execute(
                 &format!("DELETE FROM {table} WHERE device_id = ?1"),
@@ -380,7 +380,7 @@ pub(super) fn save_device_pioneer_export(
     {
         let mut insert = transaction
             .prepare_cached(
-                "INSERT INTO sync_pioneer_databases (device_id, size_bytes, sha256) \
+                "INSERT INTO sync_catalogue_databases (device_id, size_bytes, sha256) \
                  VALUES (?1, ?2, ?3)",
             )
             .map_err(StoreError::from)?;
@@ -397,7 +397,7 @@ pub(super) fn save_device_pioneer_export(
         }
         let mut insert = transaction
             .prepare_cached(
-                "INSERT INTO sync_pioneer_artwork (device_id, on_device_path) VALUES (?1, ?2)",
+                "INSERT INTO sync_catalogue_artwork (device_id, on_device_path) VALUES (?1, ?2)",
             )
             .map_err(StoreError::from)?;
         for path in &record.artwork {
@@ -409,12 +409,12 @@ pub(super) fn save_device_pioneer_export(
     transaction.commit().map_err(StoreError::from)
 }
 
-pub(super) fn device_pioneer_export(
+pub(super) fn device_catalogue(
     connection: &Connection,
     id: &SyncDeviceId,
-) -> StoreResult<PioneerExportRecord> {
+) -> StoreResult<CatalogueRecord> {
     let mut statement = connection
-        .prepare("SELECT size_bytes, sha256 FROM sync_pioneer_databases WHERE device_id = ?1")
+        .prepare("SELECT size_bytes, sha256 FROM sync_catalogue_databases WHERE device_id = ?1")
         .map_err(StoreError::from)?;
     let mut rows = statement
         .query(params![id.as_str()])
@@ -422,7 +422,7 @@ pub(super) fn device_pioneer_export(
     let mut databases = BTreeSet::new();
     while let Some(row) = rows.next().map_err(StoreError::from)? {
         let size_bytes: i64 = row.get(0).map_err(StoreError::from)?;
-        databases.insert(PioneerDatabase {
+        databases.insert(CatalogueDatabase {
             size_bytes: u64::try_from(size_bytes).map_err(|_| {
                 StoreError::InvalidStoredEnum(format!("device Pioneer database size: {size_bytes}"))
             })?,
@@ -431,7 +431,7 @@ pub(super) fn device_pioneer_export(
     }
     let mut statement = connection
         .prepare(
-            "SELECT on_device_path FROM sync_pioneer_artwork \
+            "SELECT on_device_path FROM sync_catalogue_artwork \
              WHERE device_id = ?1 ORDER BY on_device_path",
         )
         .map_err(StoreError::from)?;
@@ -446,7 +446,7 @@ pub(super) fn device_pioneer_export(
         })?;
         artwork.insert(path);
     }
-    Ok(PioneerExportRecord { databases, artwork })
+    Ok(CatalogueRecord { databases, artwork })
 }
 
 fn device_from_row(row: &rusqlite::Row<'_>) -> StoreResult<SyncDevice> {
@@ -502,8 +502,8 @@ fn selection_from_columns(kind: i64, item_id: i64) -> StoreResult<PlaylistItem> 
 mod tests {
     use crate::{LibraryStore, SqliteLibraryStore, StoreError};
     use sustain_domain::{
-        AnlzRecord, DeviceKind, DeviceLayout, DeviceRelativePath, FilesPerFolderCap,
-        PioneerExportRecord, PlaylistId, PlaylistItem, SmartPlaylistId, SyncDevice, SyncDeviceId,
+        AnlzRecord, CatalogueRecord, DeviceKind, DeviceLayout, DeviceRelativePath,
+        FilesPerFolderCap, PlaylistId, PlaylistItem, SmartPlaylistId, SyncDevice, SyncDeviceId,
         SyncManifestEntry, TrackId,
     };
 
@@ -694,17 +694,17 @@ mod tests {
     }
 
     #[test]
-    fn a_pioneer_export_record_is_saved_in_place_of_the_last_one() {
+    fn a_catalogue_record_is_saved_in_place_of_the_last_one() {
         let store = SqliteLibraryStore::open_in_memory().expect("store");
         let d = device("dev-pioneer");
         store.save_sync_device(&d).expect("save");
         let other = device("dev-other");
         store.save_sync_device(&other).expect("save other");
-        let record = |databases: &[&str], artwork: &[&str]| PioneerExportRecord {
+        let record = |databases: &[&str], artwork: &[&str]| CatalogueRecord {
             databases: databases
                 .iter()
                 .zip(1_u64..)
-                .map(|(digest, size_bytes)| sustain_domain::PioneerDatabase {
+                .map(|(digest, size_bytes)| sustain_domain::CatalogueDatabase {
                     size_bytes,
                     sha256: (*digest).to_owned(),
                 })
@@ -713,11 +713,11 @@ mod tests {
         };
         let other_record = record(&["other"], &["PIONEER/Artwork/00001/a1.jpg"]);
         store
-            .save_device_pioneer_export(&other.id, &other_record)
+            .save_device_catalogue(&other.id, &other_record)
             .expect("save other record");
         assert_eq!(
-            store.device_pioneer_export(&d.id).expect("load"),
-            PioneerExportRecord::default()
+            store.device_catalogue(&d.id).expect("load"),
+            CatalogueRecord::default()
         );
 
         // While a sync publishes a new database, both digests are recorded.
@@ -729,26 +729,23 @@ mod tests {
             ],
         );
         store
-            .save_device_pioneer_export(&d.id, &publishing)
+            .save_device_catalogue(&d.id, &publishing)
             .expect("save");
-        assert_eq!(
-            store.device_pioneer_export(&d.id).expect("load"),
-            publishing
-        );
+        assert_eq!(store.device_catalogue(&d.id).expect("load"), publishing);
         let published = record(&["second"], &["PIONEER/Artwork/00001/a3.jpg"]);
         store
-            .save_device_pioneer_export(&d.id, &published)
+            .save_device_catalogue(&d.id, &published)
             .expect("replace");
-        assert_eq!(store.device_pioneer_export(&d.id).expect("load"), published);
+        assert_eq!(store.device_catalogue(&d.id).expect("load"), published);
         assert_eq!(
-            store.device_pioneer_export(&other.id).expect("load other"),
+            store.device_catalogue(&other.id).expect("load other"),
             other_record
         );
 
         // Deleting a device forgets its record, in both tables.
         store.delete_sync_device(&d.id).expect("delete");
         let connection = store.connection_guard().expect("connection");
-        for table in ["sync_pioneer_databases", "sync_pioneer_artwork"] {
+        for table in ["sync_catalogue_databases", "sync_catalogue_artwork"] {
             let rows: i64 = connection
                 .query_row(
                     &format!("SELECT COUNT(*) FROM {table} WHERE device_id = ?1"),

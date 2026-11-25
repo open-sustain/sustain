@@ -800,6 +800,15 @@ WHERE audio_attempted_at_unix IS NOT NULL
 DROP TABLE retried_container_tracks;
 "#;
 
+// Migration 27 gives the record of what Sustain left on a device's
+// catalogue, kept so far for Pioneer exports alone, a name that fits the
+// iPod's catalogue too: the track databases Sustain wrote, by size and
+// digest, and the artwork files it owns. Every row is kept.
+pub(super) const RENAME_SYNC_CATALOGUE_RECORD_SQL: &str = r#"
+ALTER TABLE sync_pioneer_databases RENAME TO sync_catalogue_databases;
+ALTER TABLE sync_pioneer_artwork RENAME TO sync_catalogue_artwork;
+"#;
+
 // Migration 5 heals libraries that captured empty metadata strings from file
 // tags before Sustain normalized them at the read boundary. Empty tag values
 // are semantically absent and not all target containers can round-trip them.

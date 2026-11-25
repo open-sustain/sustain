@@ -38,9 +38,9 @@ impl ManifestJournal for UnrecordedJournal {
         Ok(())
     }
 
-    fn record_pioneer_export(
+    fn record_catalogue(
         &mut self,
-        _record: &sustain_domain::PioneerExportRecord,
+        _record: &sustain_domain::CatalogueRecord,
     ) -> Result<(), JournalError> {
         Ok(())
     }
@@ -203,7 +203,7 @@ fn engine_sync_lays_out_android_paths() {
         }],
         previous_manifest: Vec::new(),
         previous_playlist_files: Vec::new(),
-        previous_pioneer_export: sustain_domain::PioneerExportRecord::default(),
+        previous_catalogue: sustain_domain::CatalogueRecord::default(),
         remove_stale: false,
         export_date: "2026-06-07".to_owned(),
     };

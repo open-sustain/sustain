@@ -19,14 +19,14 @@ use crate::{
         BACKFILL_GENERATED_SORT_FIELDS_SQL, INDEX_PLAYLIST_ENTRIES_BY_TRACK_SQL,
         MOVE_WAVEFORMS_TO_CACHE_SQL, NORMALIZE_EMPTY_TRACK_METADATA_SQL,
         RECORD_CHECKED_LIBRARY_ROOT_SQL, RECORD_TAG_MIRROR_FIELDS_SQL,
-        RETRY_EMPTY_CONTAINER_ANALYSIS_ATTEMPTS_SQL, RETRY_EMPTY_FLAC_ANALYSIS_ATTEMPTS_SQL,
-        RETRY_HIGH_RATE_MP4_ANALYSIS_ATTEMPTS_SQL, SCHEMA_SQL, STORE_BPM_IN_HUNDREDTHS_SQL,
-        STORE_SMART_PLAYLIST_RULE_DATES_AS_DAYS_SQL, VERSION_ANALYSIS_PER_CAPABILITY_SQL,
-        VERSION_ONLINE_ATTEMPTS_PER_CAPABILITY_SQL,
+        RENAME_SYNC_CATALOGUE_RECORD_SQL, RETRY_EMPTY_CONTAINER_ANALYSIS_ATTEMPTS_SQL,
+        RETRY_EMPTY_FLAC_ANALYSIS_ATTEMPTS_SQL, RETRY_HIGH_RATE_MP4_ANALYSIS_ATTEMPTS_SQL,
+        SCHEMA_SQL, STORE_BPM_IN_HUNDREDTHS_SQL, STORE_SMART_PLAYLIST_RULE_DATES_AS_DAYS_SQL,
+        VERSION_ANALYSIS_PER_CAPABILITY_SQL, VERSION_ONLINE_ATTEMPTS_PER_CAPABILITY_SQL,
     },
 };
 
-pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 26;
+pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 27;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -177,6 +177,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 26,
         description: "attempt again every WAV, AIFF, MP4 and Ogg Vorbis analysis that left nothing behind",
         step: MigrationStep::Sql(RETRY_EMPTY_CONTAINER_ANALYSIS_ATTEMPTS_SQL),
+    },
+    Migration {
+        version: 27,
+        description: "name the device catalogue record for every layout that keeps one",
+        step: MigrationStep::Sql(RENAME_SYNC_CATALOGUE_RECORD_SQL),
     },
 ];
 
@@ -432,12 +437,12 @@ mod tests {
         "smart_playlists",
         "smart_shuffle_index",
         "source_fingerprint_cache",
+        "sync_catalogue_artwork",
+        "sync_catalogue_databases",
         "sync_device_artists",
         "sync_device_playlists",
         "sync_devices",
         "sync_manifest",
-        "sync_pioneer_artwork",
-        "sync_pioneer_databases",
         "sync_playlist_files",
         "tag_mirror_outbox",
         "track_acoustics",
@@ -1704,6 +1709,64 @@ mod tests {
     }
 
     #[test]
+    fn upgrade_from_v26_keeps_every_catalogue_record_row_under_the_new_names() {
+        let connection = Connection::open_in_memory().expect("connection");
+        apply_pending_from_registry(&connection, &MIGRATIONS[..26]).expect("schema version 26");
+        connection
+            .execute_batch(
+                "INSERT INTO sync_devices
+                     (id, label, kind, layout, sub_path, files_per_folder_cap, volume_id)
+                 VALUES ('d', 'Drive', 0, 2, '', 0, NULL);
+                 INSERT INTO sync_pioneer_databases VALUES
+                     ('d', 4096, 'aa'), ('d', 8192, 'bb');
+                 INSERT INTO sync_pioneer_artwork VALUES
+                     ('d', 'PIONEER/Artwork/00001/a1.jpg');",
+            )
+            .expect("seed a Pioneer export's record");
+
+        apply_pending(&connection).expect("upgrade");
+
+        let databases: Vec<(String, i64, String)> = connection
+            .prepare("SELECT * FROM sync_catalogue_databases ORDER BY size_bytes")
+            .expect("prepare")
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .expect("query")
+            .collect::<Result<_, _>>()
+            .expect("databases");
+        assert_eq!(
+            databases,
+            [
+                ("d".to_owned(), 4096, "aa".to_owned()),
+                ("d".to_owned(), 8192, "bb".to_owned()),
+            ]
+        );
+        let artwork: Vec<(String, String)> = connection
+            .prepare("SELECT * FROM sync_catalogue_artwork")
+            .expect("prepare")
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .expect("query")
+            .collect::<Result<_, _>>()
+            .expect("artwork");
+        assert_eq!(
+            artwork,
+            [("d".to_owned(), "PIONEER/Artwork/00001/a1.jpg".to_owned())]
+        );
+        // The rows still go with their device.
+        connection
+            .execute("DELETE FROM sync_devices WHERE id = 'd'", [])
+            .expect("forget the device");
+        let left: i64 = connection
+            .query_row(
+                "SELECT (SELECT count(*) FROM sync_catalogue_databases)
+                      + (SELECT count(*) FROM sync_catalogue_artwork)",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count");
+        assert_eq!(left, 0);
+    }
+
+    #[test]
     fn upgrade_from_v25_attempts_again_every_empty_analysis_of_a_container_that_records_its_length()
     {
         let connection = Connection::open_in_memory().expect("connection");
@@ -2413,6 +2476,7 @@ WHERE track_id IN (SELECT id FROM tracks WHERE musical_key IS NOT NULL);
         0xbe70024d8ca730f3,
         0x58747e3863d8be1c,
         0x370d1352548850b5,
+        0xb12528bf671282f3,
     ];
 
     fn migration_fingerprint(migration: &Migration) -> u64 {
