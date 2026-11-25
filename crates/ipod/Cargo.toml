@@ -1,0 +1,24 @@
+[package]
+name = "sustain-ipod"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "sustain_ipod"
+path = "src/lib.rs"
+
+[dependencies]
+# Neutral value types: the collation the browse indexes sort by. The crate
+# deliberately depends on nothing heavier — no storage, no transport — so
+# the iPod on-device format lives in isolation, like `sustain-pioneer`.
+sustain-domain = { path = "../domain" }
+# hash58, the signature hash58-checked iPods require on their iTunesDB, is
+# HMAC-SHA1. RustCrypto, the family of the `sha2` already in the workspace.
+sha1 = "0.11.0"
+hmac = "0.13.0"
+
+[lints]
+workspace = true

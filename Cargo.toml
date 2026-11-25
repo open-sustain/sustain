@@ -12,6 +12,7 @@ members = [
   "crates/domain",
   "crates/dsp",
   "crates/i18n",
+  "crates/ipod",
   "crates/library_store",
   "crates/metadata",
   "crates/metadata_remote",

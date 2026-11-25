@@ -101,6 +101,13 @@ here:
   binary content. See the footer disclaimer on the website and the in-code
   documentation in `crates/pioneer/src/pdb.rs` and
   `crates/pioneer/src/path_hash.rs`.
+- **iPod catalogue interoperability constants** — the iPod writer generates
+  every `iTunesDB` record from typed first-party Rust code. Its record layouts,
+  field offsets, model-number table and the hash58 signing procedure are
+  factual format information derived for interoperability, with libgpod as the
+  reference; no libgpod source is copied, and the AES S-boxes are generated
+  from FIPS 197. `crates/ipod/PROVENANCE.md` records each source and the
+  libgpod-written known-answer fixture.
 - **Sustain's own assets** — application icons, the `.desktop` entry, the
   AppStream metainfo, and `crates/ui_gtk/src/app.css` — are first-party content
   under Sustain's GPL-3.0-or-later license.

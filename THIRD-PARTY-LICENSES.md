@@ -31,7 +31,7 @@ in the Flatpak.
 
 ## Summary
 
-- **Apache License 2.0** (`Apache-2.0`) — 154 crate(s)
+- **Apache License 2.0** (`Apache-2.0`) — 158 crate(s)
 - **MIT License** (`MIT`) — 54 crate(s)
 - **Unicode License v3** (`Unicode-3.0`) — 20 crate(s)
 - **Mozilla Public License 2.0** (`MPL-2.0`) — 16 crate(s)
@@ -72,6 +72,8 @@ OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 Applies to:
 
+- [cmov 0.5.4](https://github.com/RustCrypto/utils)
+- [ctutils 0.4.8](https://github.com/RustCrypto/utils)
 - [static_assertions 1.1.0](https://github.com/nvzqz/static-assertions-rs)
 - [tinyvec 1.11.0](https://github.com/Lokathor/tinyvec)
 - [ureq-proto 0.7.1](https://github.com/algesten/ureq-proto)
@@ -4022,7 +4024,9 @@ Applies to:
 - [cpufeatures 0.3.0](https://github.com/RustCrypto/utils)
 - [crypto-common 0.2.2](https://github.com/RustCrypto/traits)
 - [digest 0.11.3](https://github.com/RustCrypto/traits)
+- [hmac 0.13.0](https://github.com/RustCrypto/MACs)
 - [hybrid-array 0.4.12](https://github.com/RustCrypto/hybrid-array)
+- [sha1 0.11.0](https://github.com/RustCrypto/hashes)
 - [sha2 0.11.1](https://github.com/RustCrypto/hashes)
 
 ```text
