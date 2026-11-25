@@ -55,7 +55,8 @@ release.
 The Release workflow handles the rest: build .deb (amd64 + arm64),
 verify install on Ubuntu 25.10 + 26.04, build Flatpak bundle, create
 the GitHub release with auto-generated commit-based notes, and attach
-all artifacts.
+all artifacts. An `alpha` or `beta` release is published as a GitHub
+pre-release, so "Latest" stays on the newest stable release.
 
 ## Version computation
 

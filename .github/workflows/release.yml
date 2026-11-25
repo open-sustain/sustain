@@ -365,3 +365,7 @@ jobs:
           # workflow_dispatch, `github.ref_name` is the branch we
           # dispatched from, so we must pull the tag from inputs.ref.
           tag_name: ${{ inputs.ref || github.ref_name }}
+          # An alpha or beta tag (vX.Y.Z-track.N) is published as a
+          # pre-release, so GitHub's "Latest" stays on the newest stable
+          # release and only testers who seek a pre-release get one.
+          prerelease: ${{ contains(inputs.ref || github.ref_name, '-') }}
