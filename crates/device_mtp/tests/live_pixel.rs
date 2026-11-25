@@ -17,9 +17,9 @@ use std::thread;
 
 use sustain_device_mtp::MtpTransport;
 use sustain_device_sync::{
-    DeviceTransport, JournalError, ManifestJournal, MtpTarget, PreparedSyncRequest, SourceSnapshot,
-    SyncInputPlaylist, SyncInputTrack, SyncRequest, engine, resolve_source_fingerprint,
-    source_file_stat,
+    DeviceTransport, JournalError, ManifestJournal, MtpTarget, PreparedAssets, PreparedSyncRequest,
+    SourceSnapshot, SyncInputPlaylist, SyncInputTrack, SyncRequest, engine,
+    resolve_source_fingerprint, source_file_stat,
 };
 use sustain_domain::{
     DeviceKind, DeviceLayout, DeviceRelativePath, FilesPerFolderCap, SyncDevice, SyncDeviceId,
@@ -216,7 +216,7 @@ fn engine_sync_lays_out_android_paths() {
         remove_stale: false,
         export_date: "2026-06-07".to_owned(),
     };
-    let prepared = PreparedSyncRequest::new(request, None).expect("prepared");
+    let prepared = PreparedSyncRequest::new(request, PreparedAssets::None).expect("prepared");
 
     let handle = thread::spawn(move || {
         let transport = MtpTransport::open(&target);

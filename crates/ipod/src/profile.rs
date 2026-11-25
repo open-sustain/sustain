@@ -226,6 +226,11 @@ impl Profile {
     }
 }
 
+/// The largest cover edge any supported iPod shows: the classic's 320 px.
+/// Covers prepared at this edge render every format of every family
+/// without enlarging, so they can be prepared before the model is read.
+pub const LARGEST_COVER_EDGE: u32 = 320;
+
 /// What an iPod's `iPod_Control/Device/SysInfo` says about it. The file is
 /// lines of `Key: value`; only the two keys Sustain needs are kept.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -363,7 +368,7 @@ const MODEL_NUMBERS: &[(&str, Family)] = &[
 
 #[cfg(test)]
 mod tests {
-    use super::{Checksum, Family, FirewireGuid, SysInfo};
+    use super::{Checksum, Family, FirewireGuid, LARGEST_COVER_EDGE, MODEL_NUMBERS, SysInfo};
 
     #[test]
     fn the_testers_classic_is_a_signed_video_capable_family() {
@@ -401,6 +406,14 @@ mod tests {
         assert_eq!(profile.bytes_per_cover(), 6_160 + 32_768 + 204_800);
         assert_eq!(profile.cover_edge(), Some(320));
         assert!(profile.sparse_artwork);
+    }
+
+    #[test]
+    fn no_family_shows_a_cover_larger_than_the_largest_edge() {
+        for &(_, family) in MODEL_NUMBERS {
+            let edge = family.profile().cover_edge().unwrap_or(0);
+            assert!(edge <= LARGEST_COVER_EDGE, "{family:?} shows {edge} px");
+        }
     }
 
     #[test]

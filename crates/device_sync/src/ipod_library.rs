@@ -11,13 +11,13 @@
 //! Finder wrote is refused, so Sustain never deletes music it did not put
 //! there. See `docs/ipod-sync-design.md`.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use sha2::{Digest, Sha256};
-use sustain_domain::{CatalogueRecord, DeviceRelativePath, TrackId};
+use sustain_domain::{CatalogueRecord, CollationKey, DeviceRelativePath, TrackId};
 use sustain_ipod::{
-    Checksum, Family, FileType, FirewireGuid, IpodLibrary, IpodPlaylist, IpodTrack, Profile,
-    SysInfo,
+    Checksum, CoverId, CoverSet, Family, FileType, FirewireGuid, IpodLibrary, IpodPlaylist,
+    IpodTrack, Profile, Shard, SysInfo,
 };
 
 use crate::catalogue;
@@ -47,6 +47,12 @@ pub(crate) struct Ipod {
     profile: Profile,
     /// The key of the catalogue's signature, for the families that sign it.
     guid: Option<FirewireGuid>,
+}
+
+impl Ipod {
+    pub(crate) const fn profile(&self) -> Profile {
+        self.profile
+    }
 }
 
 /// Identify the iPod behind `transport`, or refuse it: a Mac-formatted or
@@ -144,9 +150,12 @@ pub(crate) fn plays(track: &SyncInputTrack) -> bool {
 }
 
 /// Where each track the iPod plays goes:
-/// `iPod_Control/Music/F{id mod 50}/S{id in base 36}.{ext}`. The name
-/// comes from the track's id alone, so a track keeps its file however its
-/// tags change, and two tracks never share one.
+/// `iPod_Control/Music/F{id mod 50}/S{id in base 36}.{ext}`, the id padded
+/// to six digits. The name comes from the track's id alone, so a track
+/// keeps its file however its tags change, and two tracks never share one.
+/// It is never one iTunes or libgpod writes — four characters, and
+/// `libgpod` and digits — so a file they left in a folder is not written
+/// over.
 pub(crate) fn placements(req: &SyncRequest) -> Result<Vec<Placement>, SyncError> {
     req.tracks
         .iter()
@@ -166,7 +175,7 @@ fn audio_path(track_id: TrackId, extension: &str) -> Result<DeviceRelativePath, 
     let id = track_id.get();
     let folder = id.rem_euclid(MUSIC_FOLDERS);
     DeviceRelativePath::new(format!(
-        "iPod_Control/Music/F{folder:02}/S{}.{extension}",
+        "iPod_Control/Music/F{folder:02}/S{:0>6}.{extension}",
         base36(id.unsigned_abs())
     ))
     .ok_or_else(|| SyncError::planning("generated an unsafe iPod audio path"))
@@ -186,14 +195,18 @@ fn base36(mut value: u64) -> String {
     String::from_utf8(digits).expect("base-36 digits are ASCII")
 }
 
-/// Publish the catalogue of the placements in `present` (see
+/// Publish the library of the placements in `present` (see
 /// [`crate::layout::write_m3u_playlists`]) on `ipod`, once their audio is
-/// in place. `record` is kept current, and journaled before each change it
-/// covers.
+/// in place: the cover files and their `ArtworkDB`, then the catalogue,
+/// then the removal of the cover files no longer used. `record` is kept
+/// current, and journaled before each change it covers.
 ///
-/// The firmware's own event files go first: their rows name tracks by
-/// position in the catalogue they were recorded against, and applied to
-/// the new one they would credit plays and ratings to the wrong tracks.
+/// Until the new catalogue is published the old one stays in place, so a
+/// run that stops part-way at worst leaves it showing the wrong covers,
+/// which the next sync puts right. The firmware's own event files go just
+/// before the catalogue: their rows name tracks by position in the
+/// catalogue they were recorded against, and applied to the new one they
+/// would credit plays and ratings to the wrong tracks.
 pub(crate) fn write_catalogue(
     req: &PreparedSyncRequest,
     transport: &dyn DeviceTransport,
@@ -203,8 +216,26 @@ pub(crate) fn write_catalogue(
     record: &mut CatalogueRecord,
     journal: &mut dyn ManifestJournal,
 ) -> Result<(), SyncError> {
-    let library = library(req, placements, present)?;
-    let bytes = sustain_ipod::write(&library, ipod.profile, ipod.guid).map_err(SyncError::Ipod)?;
+    let covers = req.ipod_covers()?;
+    let library = library(req, &covers.tracks, placements, present)?;
+    let catalogue =
+        sustain_ipod::write(&library, ipod.profile, ipod.guid).map_err(SyncError::Ipod)?;
+    let stale_covers = if ipod.profile.cover_formats.is_empty() {
+        Vec::new()
+    } else {
+        let artwork =
+            sustain_ipod::artwork::database(&library.tracks, &covers.covers, ipod.profile)
+                .map_err(SyncError::Ipod)?;
+        write_covers(
+            transport,
+            &covers.covers,
+            ipod.profile,
+            &artwork,
+            record,
+            journal,
+        )?
+    };
+
     for path in sustain_ipod::DEVICE_EVENT_RELATIVE_PATHS {
         let path = DeviceRelativePath::new(path).expect("static iPod event path is safe");
         transport
@@ -214,22 +245,123 @@ pub(crate) fn write_catalogue(
     let path = itunesdb_path();
     // Until the new catalogue is known to be published, either it or the
     // one it replaces may be what the iPod holds.
-    let database = catalogue::identity(&bytes);
+    let database = catalogue::identity(&catalogue);
     record.databases.insert(database.clone());
     journal
         .record_catalogue(record)
         .map_err(SyncError::Journal)?;
     transport
-        .write_file(&path, &bytes)
+        .write_file(&path, &catalogue)
         .map_err(|error| SyncError::io(path.as_str(), error))?;
     record.databases = BTreeSet::from([database]);
-    journal.record_catalogue(record).map_err(SyncError::Journal)
+    journal
+        .record_catalogue(record)
+        .map_err(SyncError::Journal)?;
+
+    // Only now that no catalogue on the iPod names them do the cover files
+    // the previous one used go.
+    if !stale_covers.is_empty() {
+        for path in stale_covers {
+            transport
+                .remove_file_if_exists(&path)
+                .map_err(|error| SyncError::io(path.as_str(), error))?;
+            record.artwork.remove(&path);
+        }
+        journal
+            .record_catalogue(record)
+            .map_err(SyncError::Journal)?;
+    }
+    Ok(())
+}
+
+/// Write the `.ithmb` cover files of `covers`, one rendered at a time,
+/// then `artwork`, their `ArtworkDB`. Each file is recorded as Sustain's
+/// before it is written. Returns the cover files `record` holds that this
+/// library no longer uses, for removal once the new catalogue is out.
+///
+/// A cover file already on the iPod under one of these names is written
+/// over even if Sustain did not write it: only an iPod whose catalogue is
+/// Sustain's or lists no tracks gets here, and beside such a catalogue an
+/// older cover file shows nothing.
+fn write_covers(
+    transport: &dyn DeviceTransport,
+    covers: &CoverSet,
+    profile: Profile,
+    artwork: &[u8],
+    record: &mut CatalogueRecord,
+    journal: &mut dyn ManifestJournal,
+) -> Result<Vec<DeviceRelativePath>, SyncError> {
+    let directory = DeviceRelativePath::new(sustain_ipod::ARTWORK_DIRECTORY)
+        .expect("static artwork path is safe");
+    let shards: BTreeMap<DeviceRelativePath, Shard> =
+        sustain_ipod::artwork::shards(covers, profile)
+            .into_iter()
+            .map(|shard| {
+                let path = directory
+                    .join_component(&shard.file_name())
+                    .expect("generated cover file name is safe");
+                (path, shard)
+            })
+            .collect();
+    let stale = record
+        .artwork
+        .iter()
+        .filter(|path| !shards.contains_key(*path))
+        .cloned()
+        .collect();
+    record.artwork.extend(shards.keys().cloned());
+    journal
+        .record_catalogue(record)
+        .map_err(SyncError::Journal)?;
+    for (path, shard) in &shards {
+        let bytes = shard.render(covers).map_err(SyncError::IpodCover)?;
+        transport
+            .write_file(path, &bytes)
+            .map_err(|error| SyncError::io(path.as_str(), error))?;
+    }
+    let path = DeviceRelativePath::new(sustain_ipod::ARTWORK_DB_RELATIVE_PATH)
+        .expect("static ArtworkDB path is safe");
+    transport
+        .write_file(&path, artwork)
+        .map_err(|error| SyncError::io(path.as_str(), error))?;
+    Ok(stale)
+}
+
+/// About how many more bytes the covers of `placements` need on the iPod
+/// than the cover files Sustain already left there hold: one cover per
+/// album, the most there can be once the covers are read.
+pub(crate) fn cover_bytes_to_write(
+    transport: &dyn DeviceTransport,
+    req: &SyncRequest,
+    placements: &[Placement],
+    profile: Profile,
+) -> Result<u64, SyncError> {
+    let albums: HashSet<(CollationKey, CollationKey)> = placements
+        .iter()
+        .map(|placement| {
+            let track = &req.tracks[placement.track_index];
+            let artist = track.album_artist.as_deref().unwrap_or(&track.artist);
+            (CollationKey::new(artist), CollationKey::new(&track.album))
+        })
+        .collect();
+    let needed = u64::try_from(albums.len())
+        .unwrap_or(u64::MAX)
+        .saturating_mul(profile.bytes_per_cover());
+    let mut held: u64 = 0;
+    for path in &req.previous_catalogue.artwork {
+        let len = transport
+            .regular_file_len(path)
+            .map_err(|error| SyncError::io(path.as_str(), error))?;
+        held = held.saturating_add(len.unwrap_or(0));
+    }
+    Ok(needed.saturating_sub(held))
 }
 
 /// The catalogue of the present placements, in placement order, and of
 /// the selection's playlists.
 fn library(
     req: &SyncRequest,
+    covers: &[Option<CoverId>],
     placements: &[Placement],
     present: &HashSet<usize>,
 ) -> Result<IpodLibrary, SyncError> {
@@ -243,6 +375,7 @@ fn library(
         tracks.push(ipod_track(
             &req.tracks[placement.track_index],
             &placement.rel_path,
+            covers[placement.track_index],
         )?);
     }
     let device = req.device.id.as_str();
@@ -276,6 +409,7 @@ fn library(
 fn ipod_track(
     track: &SyncInputTrack,
     location: &DeviceRelativePath,
+    cover: Option<CoverId>,
 ) -> Result<IpodTrack, SyncError> {
     let out_of_range = |field: &str| {
         SyncError::planning(format!(
@@ -314,7 +448,7 @@ fn ipod_track(
         sample_rate_hz: u16::try_from(track.sample_rate_hz)
             .map_err(|_| out_of_range("sample rate"))?,
         date_added: track.date_added,
-        cover: None,
+        cover,
     })
 }
 

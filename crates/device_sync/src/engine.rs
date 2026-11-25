@@ -172,7 +172,7 @@ pub fn plan(transport: &dyn DeviceTransport, req: &SyncRequest) -> Result<SyncPl
     let base = device_base(req);
     let placements = layout::plan_placements(req)?;
     let diff = compute_diff(req, transport, &base, &placements)?;
-    let bytes_to_copy = diff
+    let audio_bytes_to_copy: u64 = diff
         .to_write
         .iter()
         .map(|&i| req.tracks[placements[i].track_index].source.stat.size_bytes)
@@ -182,14 +182,25 @@ pub fn plan(transport: &dyn DeviceTransport, req: &SyncRequest) -> Result<SyncPl
         .map(|p| req.tracks[p.track_index].source.stat.size_bytes)
         .sum();
     let genre_bytes = genre_breakdown(req, &placements);
-    let blocker = match req.device.layout {
-        DeviceLayout::Pioneer => blocker_of(pioneer_export::ensure_database_is_ours(
-            transport,
-            &base,
-            &req.previous_catalogue,
-        ))?,
-        DeviceLayout::Ipod => blocker_of(writable_ipod(transport, req).map(drop))?,
-        DeviceLayout::M3u | DeviceLayout::FolderPerPlaylist => None,
+    let (blocker, cover_bytes) = match req.device.layout {
+        DeviceLayout::Pioneer => (
+            blocker_of(pioneer_export::ensure_database_is_ours(
+                transport,
+                &base,
+                &req.previous_catalogue,
+            ))?,
+            0,
+        ),
+        // The covers are rewritten on every sync, beside the audio.
+        DeviceLayout::Ipod => match writable_ipod(transport, req) {
+            Ok(ipod) => (
+                None,
+                ipod_library::cover_bytes_to_write(transport, req, &placements, ipod.profile())?,
+            ),
+            Err(SyncError::Blocked(blocker)) => (Some(blocker), 0),
+            Err(error) => return Err(error),
+        },
+        DeviceLayout::M3u | DeviceLayout::FolderPerPlaylist => (None, 0),
     };
     Ok(SyncPlan {
         to_copy: diff.copy_count(),
@@ -200,7 +211,7 @@ pub fn plan(transport: &dyn DeviceTransport, req: &SyncRequest) -> Result<SyncPl
             .chain(diff.stale_playlist_files)
             .collect(),
         unchanged: diff.unchanged.len(),
-        bytes_to_copy,
+        bytes_to_copy: audio_bytes_to_copy.saturating_add(cover_bytes),
         bytes_total,
         genre_bytes,
         blocker,

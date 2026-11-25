@@ -27,11 +27,13 @@ pub mod profile;
 mod record;
 mod sort;
 
-pub use artwork::{CoverId, CoverSet, RenderError, Shard};
+pub use artwork::{
+    ARTWORK_DB_RELATIVE_PATH, ARTWORK_DIRECTORY, CoverId, CoverSet, RenderError, Shard,
+};
 pub use hash58::FirewireGuid;
 pub use itunesdb::{track_count, write};
 pub use model::{FileType, IpodLibrary, IpodPlaylist, IpodTrack};
-pub use profile::{Checksum, CoverFormat, Family, Profile, SysInfo};
+pub use profile::{Checksum, CoverFormat, Family, LARGEST_COVER_EDGE, Profile, SysInfo};
 pub use record::WriteError;
 
 /// Where the catalogue lives, relative to the iPod's root.

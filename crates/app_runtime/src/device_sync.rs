@@ -19,7 +19,7 @@ use std::time::UNIX_EPOCH;
 use sustain_device_mtp::MtpTransport;
 use sustain_device_sync::{
     ConnectedDevice, DeviceRoot, DeviceTarget, DeviceTransport, JournalError, ManifestJournal,
-    PioneerTrackAnalysis, PreparedPioneerAssets, PreparedSyncRequest, SourceSnapshot, SyncFailure,
+    PioneerTrackAnalysis, PreparedAssets, PreparedSyncRequest, SourceSnapshot, SyncFailure,
     SyncInputPlaylist, SyncInputTrack, SyncOutcome, SyncProgress, SyncRequest, SyncStage, engine,
     resolve_source_fingerprint, source_file_stat,
 };
@@ -1268,8 +1268,7 @@ fn prepare_sync_request(
     progress: &mut dyn FnMut(SyncProgress),
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Option<PreparedSyncRequest>, sustain_device_sync::SyncError> {
-    let mut pioneer_assets =
-        (request.device.layout == DeviceLayout::Pioneer).then(PreparedPioneerAssets::new);
+    let mut assets = PreparedAssets::for_layout(request.device.layout);
     let total = request.tracks.len();
     for (index, track) in request.tracks.iter_mut().enumerate() {
         if cancelled() {
@@ -1285,38 +1284,53 @@ fn prepare_sync_request(
             .map_err(|error| sustain_device_sync::SyncError::Preparation(format!("{error:?}")))?;
         track.source = SourceSnapshot::resolved(fingerprint);
 
-        if let Some(assets) = pioneer_assets.as_mut() {
-            let waveform = store.load_waveform(track.track_id).map_err(|error| {
-                sustain_device_sync::SyncError::Preparation(format!("{error:?}"))
-            })?;
-            let beat_grid = store.load_beat_grid(track.track_id).map_err(|error| {
-                sustain_device_sync::SyncError::Preparation(format!("{error:?}"))
-            })?;
-            let timeline_delay = sustain_pioneer::timeline::device_delay(&track.source_path)
-                .map_err(|error| sustain_device_sync::SyncError::io(&track.source_path, error))?;
-            if cancelled() {
-                return Ok(None);
+        match &mut assets {
+            PreparedAssets::Pioneer(assets) => {
+                let waveform = store.load_waveform(track.track_id).map_err(|error| {
+                    sustain_device_sync::SyncError::Preparation(format!("{error:?}"))
+                })?;
+                let beat_grid = store.load_beat_grid(track.track_id).map_err(|error| {
+                    sustain_device_sync::SyncError::Preparation(format!("{error:?}"))
+                })?;
+                let timeline_delay = sustain_pioneer::timeline::device_delay(&track.source_path)
+                    .map_err(|error| {
+                        sustain_device_sync::SyncError::io(&track.source_path, error)
+                    })?;
+                if cancelled() {
+                    return Ok(None);
+                }
+                let cover_art = metadata_service
+                    .read_artwork(&track.source_path)
+                    .ok()
+                    .flatten();
+                if cancelled() {
+                    return Ok(None);
+                }
+                let (waveform_preview, waveform_detail) = match waveform {
+                    Some(waveform) => (Some(waveform.preview), Some(waveform.detail)),
+                    None => (None, None),
+                };
+                assets.push_track(
+                    PioneerTrackAnalysis {
+                        waveform_preview,
+                        waveform_detail,
+                        beat_grid,
+                        timeline_delay,
+                    },
+                    cover_art.as_deref(),
+                );
             }
-            let cover_art = metadata_service
-                .read_artwork(&track.source_path)
-                .ok()
-                .flatten();
-            if cancelled() {
-                return Ok(None);
+            PreparedAssets::Ipod(covers) => {
+                let cover_art = metadata_service
+                    .read_artwork(&track.source_path)
+                    .ok()
+                    .flatten();
+                if cancelled() {
+                    return Ok(None);
+                }
+                covers.push_track(cover_art.as_deref());
             }
-            let (waveform_preview, waveform_detail) = match waveform {
-                Some(waveform) => (Some(waveform.preview), Some(waveform.detail)),
-                None => (None, None),
-            };
-            assets.push_track(
-                PioneerTrackAnalysis {
-                    waveform_preview,
-                    waveform_detail,
-                    beat_grid,
-                    timeline_delay,
-                },
-                cover_art.as_deref(),
-            );
+            PreparedAssets::None => {}
         }
         progress(SyncProgress {
             stage: SyncStage::Preparing,
@@ -1324,7 +1338,7 @@ fn prepare_sync_request(
             total,
         });
     }
-    PreparedSyncRequest::new(request, pioneer_assets).map(Some)
+    PreparedSyncRequest::new(request, assets).map(Some)
 }
 
 /// The library's tracks under each artist, however their tags spell the
@@ -1987,6 +2001,26 @@ mod tests {
             runtime.device_sync_plan_state(&second),
             DeviceSyncPlanState::Unavailable
         );
+    }
+
+    #[test]
+    fn ipod_preparation_reads_each_tracks_cover() {
+        let sources = tempfile::tempdir().expect("source directory");
+        let first = sources.path().join("first.mp3");
+        let second = sources.path().join("second.mp3");
+        std::fs::write(&first, b"first source").expect("write first source");
+        std::fs::write(&second, b"second source").expect("write second source");
+        let mut request = pioneer_request(&[&first, &second]);
+        request.device.kind = DeviceKind::Ipod;
+        request.device.layout = DeviceLayout::Ipod;
+        let store = store_with_tracks_of(&request);
+        let metadata = CountingMetadataService::default();
+
+        prepare_sync_request(request, &store, &metadata, &mut |_| {}, &|| false)
+            .expect("preparation succeeds")
+            .expect("preparation is not cancelled");
+
+        assert_eq!(metadata.artwork_reads(), 2);
     }
 
     #[test]

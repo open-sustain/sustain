@@ -100,7 +100,9 @@ same facts.
 - **Base:** the device root, as for Pioneer.
 - **Placements** are derived from the track id, so re-syncs diff with the
   existing machinery and never rename:
-  `iPod_Control/Music/F{id mod 50:02}/S{id base36}.{ext}`. The directory
+  `iPod_Control/Music/F{id mod 50:02}/S{id base36, six digits}.{ext}`, a
+  name iTunes (four characters) and libgpod (`libgpod` and digits) never
+  write, so a file they left behind is not written over. The directory
   count is one constant: the firmware follows the path stored in the
   catalogue, and a count read from a table would re-copy the whole library
   if the table were ever corrected.
@@ -141,9 +143,12 @@ same facts.
   previous catalogue is still in place and its audio is still present,
   because removals come last. Between steps 2 and 4, only the covers can be
   wrong; the next sync fixes them. A cancelled run never writes a catalogue.
-- **Capacity:** the plan's byte total includes a cover estimate derived from
-  the profile (about 244 KB per distinct cover on a Classic). Without it, a
-  sync could run out of space after the audio is copied.
+- **Capacity:** the plan's bytes to copy include a cover estimate derived
+  from the profile: one cover per album (about 244 KB each on a Classic),
+  less what the cover files Sustain already left on the iPod hold. Without
+  it, a sync could run out of space after the audio is copied. The album
+  count is an upper bound, since the covers are read only when the sync
+  starts.
 
 ## 6. Catalogue record (shared with Pioneer)
 
@@ -168,8 +173,9 @@ the point of `PreparedSyncRequest`. Covers therefore follow
 
 - Preparation reads each track's embedded art, which is where Pioneer covers
   come from too. It decodes each distinct cover once, shrinks it to the
-  profile's largest format edge (320 px on a Classic), and keeps it as a
-  compact JPEG, roughly 40 KB.
+  largest edge any supported iPod shows (320 px, the Classic's), and keeps
+  it as a compact JPEG, roughly 40 KB. Preparation does not know the model,
+  which is read only from the device; a smaller format is a plain resize.
 - The engine renders the RGB565 for each format from those prepared covers,
   one `.ithmb` file at a time. Each file is capped at 32 MiB, well below
   libgpod's 256 MB limit, so memory holds at most one file.
@@ -184,7 +190,9 @@ the point of `PreparedSyncRequest`. Covers therefore follow
   show this hurts, one recorded digest of the cover set can skip it,
   following the `AnlzRecord` precedent.
 - Known leak: `.ithmb` files left by iTunes on a restored iPod are not
-  Sustain's, so Sustain never removes them.
+  Sustain's, so Sustain never removes them. One that bears the name of a
+  file Sustain writes is written over: beside a catalogue that lists no
+  tracks, it shows nothing.
 
 ## 8. Refusals and messages
 

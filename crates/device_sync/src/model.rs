@@ -11,9 +11,10 @@
 use std::{ops::Deref, path::PathBuf, time::Duration};
 
 use sustain_domain::{
-    BeatGrid, Bpm, CatalogueRecord, DeviceRelativePath, MusicalKey, SourceFileStat,
+    BeatGrid, Bpm, CatalogueRecord, DeviceLayout, DeviceRelativePath, MusicalKey, SourceFileStat,
     SourceFingerprint, SyncDevice, SyncManifestEntry, TrackContentHash, TrackId, WaveformSegments,
 };
+use sustain_ipod::{CoverId, CoverSet};
 use sustain_pioneer::ArtworkSet;
 
 /// Capacity of the filesystem behind an opened device mount root.
@@ -215,21 +216,77 @@ pub fn calendar_date(secs: i64) -> String {
     format!("{year:04}-{month:02}-{day:02}")
 }
 
+/// Worker-hydrated covers for one iPod library.
+///
+/// Source cover bytes are decoded and discarded as each track is hydrated:
+/// [`CoverSet`] keeps one compact prepared image per distinct cover, and
+/// each track keeps the id of its own.
+pub struct PreparedIpodCovers {
+    pub(crate) covers: CoverSet,
+    pub(crate) tracks: Vec<Option<CoverId>>,
+}
+
+impl PreparedIpodCovers {
+    pub fn new() -> Self {
+        Self {
+            covers: CoverSet::new(sustain_ipod::LARGEST_COVER_EDGE),
+            tracks: Vec::new(),
+        }
+    }
+
+    pub fn push_track(&mut self, cover_art: Option<&[u8]>) {
+        let cover = cover_art.and_then(|bytes| self.covers.add(bytes));
+        self.tracks.push(cover);
+    }
+
+    pub fn track_count(&self) -> usize {
+        self.tracks.len()
+    }
+
+    pub fn cover_count(&self) -> usize {
+        self.covers.len()
+    }
+}
+
+impl Default for PreparedIpodCovers {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// What a layout needs beyond the request itself, hydrated on the worker
+/// before the device is touched: a Pioneer export's analysis and artwork,
+/// an iPod library's covers.
+pub enum PreparedAssets {
+    /// The layout needs nothing more.
+    None,
+    Pioneer(PreparedPioneerAssets),
+    Ipod(PreparedIpodCovers),
+}
+
+impl PreparedAssets {
+    /// What `layout` will be given: the assets it needs, empty.
+    pub fn for_layout(layout: DeviceLayout) -> Self {
+        match layout {
+            DeviceLayout::Pioneer => Self::Pioneer(PreparedPioneerAssets::new()),
+            DeviceLayout::Ipod => Self::Ipod(PreparedIpodCovers::new()),
+            DeviceLayout::M3u | DeviceLayout::FolderPerPlaylist => Self::None,
+        }
+    }
+}
+
 /// A sync request whose every source observation carries a SHA-256. Only this
 /// type can reach the mutating engine, preventing provisional planning tokens
-/// from ever being persisted into a device manifest. Pioneer requests also
-/// carry worker-hydrated assets so database/audio parsing is complete before
-/// removable-media mutation begins.
+/// from ever being persisted into a device manifest. Pioneer and iPod
+/// requests also carry worker-hydrated assets so database/audio parsing is
+/// complete before removable-media mutation begins.
 pub struct PreparedSyncRequest {
     request: SyncRequest,
-    pioneer_assets: Option<PreparedPioneerAssets>,
+    assets: PreparedAssets,
 }
 
 impl PreparedSyncRequest {
-    pub fn new(
-        request: SyncRequest,
-        pioneer_assets: Option<PreparedPioneerAssets>,
-    ) -> Result<Self, SyncError> {
+    pub fn new(request: SyncRequest, assets: PreparedAssets) -> Result<Self, SyncError> {
         if !request
             .tracks
             .iter()
@@ -239,31 +296,39 @@ impl PreparedSyncRequest {
                 "one or more source fingerprints are unresolved".to_owned(),
             ));
         }
-        match (&request.device.layout, pioneer_assets.as_ref()) {
-            (sustain_domain::DeviceLayout::Pioneer, Some(assets))
-                if assets.tracks.len() == request.tracks.len() => {}
-            (sustain_domain::DeviceLayout::Pioneer, _) => {
-                return Err(SyncError::Preparation(
-                    "Pioneer assets are missing or do not match the resolved track set".to_owned(),
-                ));
+        let tracks = request.tracks.len();
+        let fits = match (request.device.layout, &assets) {
+            (DeviceLayout::Pioneer, PreparedAssets::Pioneer(assets)) => {
+                assets.tracks.len() == tracks
             }
-            (_, Some(_)) => {
-                return Err(SyncError::Preparation(
-                    "Pioneer assets were supplied for a non-Pioneer layout".to_owned(),
-                ));
-            }
-            (_, None) => {}
+            (DeviceLayout::Ipod, PreparedAssets::Ipod(covers)) => covers.tracks.len() == tracks,
+            (DeviceLayout::M3u | DeviceLayout::FolderPerPlaylist, PreparedAssets::None) => true,
+            _ => false,
+        };
+        if !fits {
+            return Err(SyncError::Preparation(
+                "the prepared assets do not match the layout or the resolved track set".to_owned(),
+            ));
         }
-        Ok(Self {
-            request,
-            pioneer_assets,
-        })
+        Ok(Self { request, assets })
     }
 
     pub(crate) fn pioneer_assets(&self) -> Result<&PreparedPioneerAssets, SyncError> {
-        self.pioneer_assets
-            .as_ref()
-            .ok_or_else(|| SyncError::Preparation("Pioneer assets were not prepared".to_owned()))
+        match &self.assets {
+            PreparedAssets::Pioneer(assets) => Ok(assets),
+            PreparedAssets::None | PreparedAssets::Ipod(_) => Err(SyncError::Preparation(
+                "Pioneer assets were not prepared".to_owned(),
+            )),
+        }
+    }
+
+    pub(crate) fn ipod_covers(&self) -> Result<&PreparedIpodCovers, SyncError> {
+        match &self.assets {
+            PreparedAssets::Ipod(covers) => Ok(covers),
+            PreparedAssets::None | PreparedAssets::Pioneer(_) => Err(SyncError::Preparation(
+                "iPod covers were not prepared".to_owned(),
+            )),
+        }
     }
 }
 
@@ -308,7 +373,9 @@ pub struct SyncPlan {
     pub to_remove: Vec<DeviceRelativePath>,
     /// Files already present and current.
     pub unchanged: usize,
-    /// Total bytes the copy/update step will transfer.
+    /// Total bytes the copy/update step will transfer. For an iPod, also
+    /// an estimate of the space its covers need beyond what its current
+    /// cover files hold.
     pub bytes_to_copy: u64,
     /// Total bytes the selection occupies on the device once synced — the
     /// sum over every placement, whether already present or not (so it
@@ -439,6 +506,8 @@ pub enum SyncError {
     Pdb(sustain_pioneer::PdbError),
     /// The iPod catalogue could not be assembled.
     Ipod(sustain_ipod::WriteError),
+    /// An iPod cover file could not be rendered.
+    IpodCover(sustain_ipod::RenderError),
     /// A change to the device could not be recorded in the journal.
     Journal(crate::journal::JournalError),
     /// Live source preparation failed before removable-media mutation.
@@ -476,6 +545,7 @@ impl std::fmt::Display for SyncError {
             Self::Io { path, source } => write!(f, "{}: {source}", path.display()),
             Self::Pdb(error) => write!(f, "Pioneer database: {error}"),
             Self::Ipod(error) => write!(f, "iPod library: {error}"),
+            Self::IpodCover(error) => write!(f, "iPod covers: {error}"),
             Self::Journal(error) => write!(f, "could not record the sync's progress: {error}"),
             Self::Preparation(message) => write!(f, "source preparation failed: {message}"),
             Self::Empty => write!(f, "the selection contains no tracks"),
@@ -491,6 +561,7 @@ impl std::error::Error for SyncError {
             Self::Io { source, .. } => Some(source),
             Self::Pdb(error) => Some(error),
             Self::Ipod(error) => Some(error),
+            Self::IpodCover(error) => Some(error),
             Self::Journal(error) => Some(error.as_ref()),
             Self::Empty | Self::Planning(_) | Self::Preparation(_) | Self::Blocked(_) => None,
         }

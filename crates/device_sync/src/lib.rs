@@ -36,10 +36,10 @@ pub use identity::{
 pub use journal::{JournalError, ManifestJournal};
 pub use layout::device_path_key;
 pub use model::{
-    DeviceCapacity, GenreBytes, PioneerTrackAnalysis, Placement, PreparedPioneerAssets,
-    PreparedSyncRequest, SourceSnapshot, SyncBlocker, SyncError, SyncFailure, SyncInputPlaylist,
-    SyncInputTrack, SyncOutcome, SyncPlan, SyncProgress, SyncRequest, SyncStage, SyncTrackFailure,
-    calendar_date,
+    DeviceCapacity, GenreBytes, PioneerTrackAnalysis, Placement, PreparedAssets,
+    PreparedIpodCovers, PreparedPioneerAssets, PreparedSyncRequest, SourceSnapshot, SyncBlocker,
+    SyncError, SyncFailure, SyncInputPlaylist, SyncInputTrack, SyncOutcome, SyncPlan, SyncProgress,
+    SyncRequest, SyncStage, SyncTrackFailure, calendar_date,
 };
 pub use source::{ensure_source_unchanged, resolve_source_fingerprint, source_file_stat};
 pub use transport::{DeviceTarget, DeviceTransport, DirectoryWorkBudget, MtpTarget, VolumeFacts};
@@ -454,20 +454,26 @@ mod tests {
     }
 
     /// `req` prepared with `analyses`, one per track, when it targets a
-    /// Pioneer layout.
+    /// Pioneer layout, and with no covers when it targets an iPod.
     fn prepared_with(
         req: &SyncRequest,
         analyses: Vec<PioneerTrackAnalysis>,
     ) -> PreparedSyncRequest {
-        let pioneer_assets = (req.device.layout == DeviceLayout::Pioneer).then(|| {
-            let mut assets = PreparedPioneerAssets::new();
-            for analysis in analyses {
-                assets.push_track(analysis, None);
+        let mut assets = PreparedAssets::for_layout(req.device.layout);
+        match &mut assets {
+            PreparedAssets::Pioneer(assets) => {
+                for analysis in analyses {
+                    assets.push_track(analysis, None);
+                }
             }
-            assets
-        });
-        PreparedSyncRequest::new(req.clone(), pioneer_assets)
-            .expect("fixture sources are all resolved")
+            PreparedAssets::Ipod(covers) => {
+                for _ in &req.tracks {
+                    covers.push_track(None);
+                }
+            }
+            PreparedAssets::None => {}
+        }
+        PreparedSyncRequest::new(req.clone(), assets).expect("fixture sources are all resolved")
     }
 
     fn run(dest: &Path, req: &SyncRequest) -> SyncOutcome {
@@ -1330,7 +1336,8 @@ mod tests {
         for _ in &req.tracks {
             assets.push_track(PioneerTrackAnalysis::default(), Some(COVER_PNG));
         }
-        PreparedSyncRequest::new(req.clone(), Some(assets)).expect("prepared Pioneer request")
+        PreparedSyncRequest::new(req.clone(), PreparedAssets::Pioneer(assets))
+            .expect("prepared Pioneer request")
     }
 
     fn sync_blocked(dest: &Path, req: &PreparedSyncRequest) -> Box<SyncFailure> {
@@ -1819,7 +1826,8 @@ mod tests {
         assert_eq!(assets.artwork_count(), 1);
         journaled_sync(
             &transport(fx.dest.path()),
-            &PreparedSyncRequest::new(req, Some(assets)).expect("prepared Pioneer request"),
+            &PreparedSyncRequest::new(req, PreparedAssets::Pioneer(assets))
+                .expect("prepared Pioneer request"),
             &mut |_| {},
             &|| false,
         )

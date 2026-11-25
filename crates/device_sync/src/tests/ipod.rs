@@ -150,9 +150,9 @@ fn a_restored_classic_gets_its_audio_and_a_signed_catalogue_of_it() {
     assert_eq!(
         paths,
         [
-            "iPod_Control/Music/F01/S1.mp3",
-            "iPod_Control/Music/F02/S2.mp3",
-            "iPod_Control/Music/F03/S3.mp3",
+            "iPod_Control/Music/F01/S000001.mp3",
+            "iPod_Control/Music/F02/S000002.mp3",
+            "iPod_Control/Music/F03/S000003.mp3",
         ]
     );
     for path in &paths {
@@ -173,10 +173,11 @@ fn a_track_id_names_its_file_in_base_36_across_fifty_folders() {
     fx.tracks[0].track_id = TrackId::new(36 * 36 + 51).expect("id");
     let device = ipod(fx.dest.path(), Some(CLASSIC_SYSINFO));
     let outcome = sync_ipod(&device, &ipod_request(&fx)).expect("sync");
-    // 1347 is 50 × 26 + 47, and 1 × 36² + 1 × 36 + 15 in base 36.
+    // 1347 is 50 × 26 + 47, and 1 × 36² + 1 × 36 + 15 in base 36; the name
+    // is padded to six digits, so it is never one of iTunes' four letters.
     assert_eq!(
         outcome.manifest[0].on_device_path.as_str(),
-        "iPod_Control/Music/F47/S11F.mp3"
+        "iPod_Control/Music/F47/S00011F.mp3"
     );
 }
 
@@ -383,4 +384,152 @@ fn a_cancelled_run_publishes_no_catalogue() {
             .exists()
     );
     assert!(outcome.catalogue.databases.is_empty());
+}
+
+/// `req` prepared with `cover` embedded in every track, or none.
+fn prepared_with_cover(req: &SyncRequest, cover: Option<&[u8]>) -> PreparedSyncRequest {
+    let mut covers = PreparedIpodCovers::new();
+    for _ in &req.tracks {
+        covers.push_track(cover);
+    }
+    PreparedSyncRequest::new(req.clone(), PreparedAssets::Ipod(covers)).expect("prepared")
+}
+
+fn artwork_files(dest: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dest.join(sustain_ipod::ARTWORK_DIRECTORY))
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    names.sort();
+    names
+}
+
+#[test]
+fn a_classic_gets_its_covers_in_three_sizes_beside_their_artwork_db() {
+    let fx = fixture(2);
+    let device = ipod(fx.dest.path(), Some(CLASSIC_SYSINFO));
+    let outcome = journaled_sync(
+        &device,
+        &prepared_with_cover(&ipod_request(&fx), Some(COVER_PNG)),
+        &mut |_| {},
+        &|| false,
+    )
+    .expect("sync");
+
+    assert_eq!(
+        artwork_files(fx.dest.path()),
+        [
+            "ArtworkDB",
+            "F1055_1.ithmb",
+            "F1060_1.ithmb",
+            "F1061_1.ithmb"
+        ]
+    );
+    // Both tracks share the one cover: one image per format.
+    let artwork = fx.dest.path().join(sustain_ipod::ARTWORK_DIRECTORY);
+    for (name, bytes) in [
+        ("F1061_1.ithmb", 55 * 112),
+        ("F1055_1.ithmb", 128 * 128 * 2),
+        ("F1060_1.ithmb", 320 * 320 * 2),
+    ] {
+        let len = std::fs::metadata(artwork.join(name))
+            .expect("cover file")
+            .len();
+        assert_eq!(len, bytes, "{name}");
+    }
+    let recorded: Vec<&str> = outcome
+        .catalogue
+        .artwork
+        .iter()
+        .map(DeviceRelativePath::as_str)
+        .collect();
+    assert_eq!(
+        recorded,
+        [
+            "iPod_Control/Artwork/F1055_1.ithmb",
+            "iPod_Control/Artwork/F1060_1.ithmb",
+            "iPod_Control/Artwork/F1061_1.ithmb",
+        ]
+    );
+}
+
+#[test]
+fn the_cover_files_of_covers_gone_from_the_library_are_removed() {
+    let fx = fixture(1);
+    let device = ipod(fx.dest.path(), Some(CLASSIC_SYSINFO));
+    let first = journaled_sync(
+        &device,
+        &prepared_with_cover(&ipod_request(&fx), Some(COVER_PNG)),
+        &mut |_| {},
+        &|| false,
+    )
+    .expect("first sync");
+    let req = SyncRequest {
+        device: ipod_request(&fx).device,
+        ..resync_request(&fx, DeviceLayout::Ipod, &first, false)
+    };
+    let second = journaled_sync(
+        &device,
+        &prepared_with_cover(&req, None),
+        &mut |_| {},
+        &|| false,
+    )
+    .expect("second sync");
+
+    assert!(second.catalogue.artwork.is_empty());
+    assert_eq!(artwork_files(fx.dest.path()), ["ArtworkDB"]);
+}
+
+#[test]
+fn an_ipod_without_a_colour_screen_gets_no_artwork() {
+    let fx = fixture(1);
+    let device = ipod(fx.dest.path(), Some("ModelNumStr: M9282\n"));
+    let outcome = journaled_sync(
+        &device,
+        &prepared_with_cover(&ipod_request(&fx), Some(COVER_PNG)),
+        &mut |_| {},
+        &|| false,
+    )
+    .expect("sync");
+    assert!(outcome.catalogue.artwork.is_empty());
+    assert!(artwork_files(fx.dest.path()).is_empty());
+}
+
+#[test]
+fn the_plan_counts_the_space_covers_need_beyond_those_on_the_ipod() {
+    let fx = fixture(2);
+    let device = ipod(fx.dest.path(), Some(CLASSIC_SYSINFO));
+    let req = ipod_request(&fx);
+    let audio: u64 = fx
+        .tracks
+        .iter()
+        .map(|track| track.source.stat.size_bytes)
+        .sum();
+    let per_cover = sustain_ipod::Family::Classic2.profile().bytes_per_cover();
+    // The fixture's two tracks are on two albums.
+    assert_eq!(
+        plan(&device, &req).expect("plan").bytes_to_copy,
+        audio + 2 * per_cover
+    );
+
+    let first = journaled_sync(
+        &device,
+        &prepared_with_cover(&req, Some(COVER_PNG)),
+        &mut |_| {},
+        &|| false,
+    )
+    .expect("sync");
+    let again = SyncRequest {
+        device: req.device.clone(),
+        ..resync_request(&fx, DeviceLayout::Ipod, &first, false)
+    };
+    // One cover is on the iPod already; the audio is too.
+    assert_eq!(
+        plan(&device, &again).expect("plan").bytes_to_copy,
+        per_cover
+    );
 }
