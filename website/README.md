@@ -55,6 +55,12 @@ uploads this directory whenever anything under `website/` changes. Pages is
 configured with the **GitHub Actions** source (Settings → Pages → Source).
 Live at <https://open-sustain.github.io/sustain/>.
 
+The same workflow builds the user documentation from `docs/` with mdBook
+(configured by `docs/book.toml`; `docs/SUMMARY.md` picks the published
+pages) into `docs/` of the uploaded site, so the page links to it
+relatively, as `docs/…`. It also redeploys whenever `docs/` changes.
+Preview it with `mdbook serve docs`.
+
 For a custom domain, set it in Settings → Pages and add a `CNAME` file here
 containing the domain so it survives redeploys. The page uses relative asset
 paths, so it works at either the project subpath or a domain root unchanged.

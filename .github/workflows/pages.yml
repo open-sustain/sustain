@@ -1,12 +1,14 @@
-name: Deploy landing page
+name: Deploy website
 
-# Publishes the static site in website/ to GitHub Pages.
-# Only runs when the site (or this workflow) changes.
+# Publishes the static site in website/ to GitHub Pages, with the user
+# documentation built from docs/ by mdBook under /docs/. Only runs when the
+# site, the documentation (or this workflow) changes.
 on:
   push:
     branches: [main]
     paths:
       - 'website/**'
+      - 'docs/**'
       - '.github/workflows/pages.yml'
   workflow_dispatch:
 
@@ -29,6 +31,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2
+        with:
+          tool: mdbook@0.5.4
+      - run: mdbook build docs --dest-dir "$GITHUB_WORKSPACE/website/docs"
       - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:

@@ -69,7 +69,7 @@ No Electron, no web wrappers. It’s built to be fast, lightweight, and play nic
 
 ## Features
 
-See [docs/features.md](docs/features.md) for the full reference.
+See the [documentation](https://open-sustain.github.io/sustain/docs/) for the full reference.
 
 - Library management with two modes: "Don't touch my files" or "Keep my library organized" (*iso-iTunes*)
 - Sidebar-driven navigation: LIBRARY (Music, Albums, Duplicates, Statistics) and PLAYLISTS, with a collapsible left column (*Sustain-native*)

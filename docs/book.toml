@@ -1,0 +1,19 @@
+# The user documentation site, published under /docs/ of the GitHub Pages
+# site by .github/workflows/pages.yml. Only the pages listed in SUMMARY.md
+# are published; the design and analysis notes in this directory stay
+# repository-only. Preview locally with `mdbook serve docs`.
+
+[book]
+title = "Sustain documentation"
+language = "en"
+src = "."
+
+[build]
+build-dir = "../target/docs-site"
+create-missing = false
+
+[output.html]
+default-theme = "light"
+preferred-dark-theme = "coal"
+git-repository-url = "https://github.com/open-sustain/sustain"
+additional-css = ["theme/sustain.css"]
