@@ -1,0 +1,88 @@
+name: Bug report
+description: Something in Sustain does not work as expected.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Many display problems depend on the desktop, not on Sustain alone, so the
+        environment fields below matter. This prints most of them:
+
+        ```sh
+        grep PRETTY_NAME /etc/os-release; echo "$XDG_CURRENT_DESKTOP $XDG_SESSION_TYPE"; gnome-shell --version 2>/dev/null; plasmashell --version 2>/dev/null
+        ```
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened, and what did you expect?
+      description: A screenshot or screen recording helps a lot.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open Settings
+        2. Click the Analysis tab
+        3. …
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Sustain version
+      description: Shown in Settings → About.
+      placeholder: "0.10.2"
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: Installed from
+      options:
+        - .deb from GitHub releases
+        - Flatpak bundle from GitHub releases
+        - Built from source
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: distribution
+    attributes:
+      label: Distribution and version
+      placeholder: Debian 13 (trixie)
+    validations:
+      required: true
+  - type: input
+    id: desktop
+    attributes:
+      label: Desktop environment and version
+      placeholder: GNOME 48.7
+    validations:
+      required: true
+  - type: dropdown
+    id: session
+    attributes:
+      label: Session type
+      options:
+        - Wayland
+        - X11
+        - I don't know
+    validations:
+      required: true
+  - type: input
+    id: display
+    attributes:
+      label: Displays and scaling
+      description: Resolution and scale of each monitor, if the problem is visual.
+      placeholder: "2560×1600 at 150 %, plus 1920×1080 at 100 %"
+  - type: textarea
+    id: log
+    attributes:
+      label: Terminal output
+      description: >
+        Start Sustain from a terminal (`sustain`, or
+        `flatpak run io.github.open_sustain.sustain`), reproduce the problem, and paste
+        what it printed.
+      render: text
